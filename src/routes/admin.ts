@@ -17,6 +17,7 @@ import {
   tripTypeValue,
   usernameValue,
   yearMonthValues,
+  nullableTime,
 } from '../utils/validation';
 
 const admin = new Hono<AuthEnv>();
@@ -26,7 +27,8 @@ admin.use('*', adminGuard);
 admin.get('/users', async (c) => {
   const result = await c.env.DB.prepare(
     `SELECT id, username, display_name, is_admin, created_at,
-            default_one_way_fare, default_trip_type
+            default_one_way_fare, default_trip_type,
+            default_clock_in, default_clock_out
      FROM users ORDER BY display_name COLLATE NOCASE, id`,
   ).all<User>();
   return c.json({ users: result.results });
@@ -48,6 +50,8 @@ admin.post('/users', async (c) => {
     100_000,
   ) ?? null;
   const defaultTripType = tripTypeValue(body.default_trip_type, 'round_trip');
+  const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
+  const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
   const passwordHash = await hashPassword(password);
 
   let user: User | undefined;
@@ -55,11 +59,13 @@ admin.post('/users', async (c) => {
     const insert = c.env.DB.prepare(
       `INSERT INTO users (
          username, password_hash, display_name, is_admin,
-         default_one_way_fare, default_trip_type
-       ) VALUES (?, ?, ?, ?, ?, ?)
+         default_one_way_fare, default_trip_type,
+         default_clock_in, default_clock_out
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id, username, display_name, is_admin, created_at,
-                 default_one_way_fare, default_trip_type`,
-    ).bind(username, passwordHash, displayName, isAdmin, defaultFare, defaultTripType);
+                 default_one_way_fare, default_trip_type,
+                 default_clock_in, default_clock_out`,
+    ).bind(username, passwordHash, displayName, isAdmin, defaultFare, defaultTripType, defaultClockIn, defaultClockOut);
     const audit = c.env.DB.prepare(
       `INSERT INTO audit_logs (
          actor_user_id, target_user_id, action, entity_type, entity_key, before_json, after_json
@@ -75,6 +81,8 @@ admin.post('/users', async (c) => {
         is_admin: isAdmin,
         default_one_way_fare: defaultFare,
         default_trip_type: defaultTripType,
+        default_clock_in: defaultClockIn,
+        default_clock_out: defaultClockOut,
       }),
       username,
     );
@@ -106,6 +114,12 @@ admin.patch('/users/:id', async (c) => {
     ? existing.default_one_way_fare
     : nullableBoundedInteger(body.default_one_way_fare, '默认片道交通费', 0, 100_000) ?? null;
   const defaultTripType = tripTypeValue(body.default_trip_type, existing.default_trip_type);
+  const defaultClockIn = body.default_clock_in === undefined
+    ? existing.default_clock_in
+    : nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
+  const defaultClockOut = body.default_clock_out === undefined
+    ? existing.default_clock_out
+    : nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
 
   if (existing.is_admin === 1 && isAdmin === 0) {
     const otherAdmin = await c.env.DB.prepare(
@@ -116,17 +130,19 @@ admin.patch('/users/:id', async (c) => {
 
   const update = c.env.DB.prepare(
     `UPDATE users
-     SET display_name = ?, is_admin = ?, default_one_way_fare = ?, default_trip_type = ?
+     SET display_name = ?, is_admin = ?, default_one_way_fare = ?, default_trip_type = ?, default_clock_in = ?, default_clock_out = ?
      WHERE id = ?
      RETURNING id, username, display_name, is_admin, created_at,
-               default_one_way_fare, default_trip_type`,
-  ).bind(displayName, isAdmin, defaultFare, defaultTripType, targetId);
+               default_one_way_fare, default_trip_type, default_clock_in, default_clock_out`,
+  ).bind(displayName, isAdmin, defaultFare, defaultTripType, defaultClockIn, defaultClockOut, targetId);
   const after = {
     ...existing,
     display_name: displayName,
     is_admin: isAdmin,
     default_one_way_fare: defaultFare,
     default_trip_type: defaultTripType,
+    default_clock_in: defaultClockIn,
+    default_clock_out: defaultClockOut,
   };
   let results: D1Result<unknown>[];
   try {
@@ -192,7 +208,8 @@ admin.get('/overview/:year/:month', async (c) => {
   const [usersResult, recordsResult, holidayData] = await Promise.all([
     c.env.DB.prepare(
       `SELECT id, username, display_name, is_admin, created_at,
-              default_one_way_fare, default_trip_type
+              default_one_way_fare, default_trip_type,
+              default_clock_in, default_clock_out
        FROM users ORDER BY display_name COLLATE NOCASE, id`,
     ).all<User>(),
     c.env.DB.prepare(
@@ -237,7 +254,8 @@ function adminFlagValue(value: unknown, fallback: number): 0 | 1 {
 async function getUser(env: CloudflareBindings, id: number): Promise<User | null> {
   return env.DB.prepare(
     `SELECT id, username, display_name, is_admin, created_at,
-            default_one_way_fare, default_trip_type
+            default_one_way_fare, default_trip_type,
+            default_clock_in, default_clock_out
      FROM users WHERE id = ?`,
   ).bind(id).first<User>();
 }

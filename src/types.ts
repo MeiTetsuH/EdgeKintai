@@ -9,6 +9,8 @@ export interface User {
   created_at: string;
   default_one_way_fare: number | null;
   default_trip_type: TransportTripType;
+  default_clock_in: string | null;
+  default_clock_out: string | null;
 }
 
 export interface Attendance {
@@ -73,5 +75,7 @@ export interface PublicAppConfig {
   default_break_minutes: number;
   default_one_way_fare: number;
   default_trip_type: TransportTripType;
+  default_clock_in: string | null;
+  default_clock_out: string | null;
   overtime_threshold_hours: number;
 }

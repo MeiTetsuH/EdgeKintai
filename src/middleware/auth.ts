@@ -68,7 +68,9 @@ export async function getSessionUser(
        u.is_admin,
        u.created_at,
        u.default_one_way_fare,
-       u.default_trip_type
+       u.default_trip_type,
+       u.default_clock_in,
+       u.default_clock_out
      FROM sessions AS s
      INNER JOIN users AS u ON u.id = s.user_id
      WHERE s.token_id = ? AND s.expires_at > datetime('now')

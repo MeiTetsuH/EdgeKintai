@@ -21,6 +21,7 @@ import {
   requiredString,
   tripTypeValue,
   usernameValue,
+  nullableTime,
 } from '../utils/validation';
 
 type AuthVars = {
@@ -36,6 +37,8 @@ type PublicUser = Pick<
   | 'is_admin'
   | 'default_one_way_fare'
   | 'default_trip_type'
+  | 'default_clock_in'
+  | 'default_clock_out'
 >;
 
 type LoginUser = User & { password_hash: string };
@@ -57,6 +60,8 @@ function toPublicUser(user: User): PublicUser {
     is_admin: user.is_admin,
     default_one_way_fare: user.default_one_way_fare,
     default_trip_type: user.default_trip_type,
+    default_clock_in: user.default_clock_in,
+    default_clock_out: user.default_clock_out,
   };
 }
 
@@ -122,6 +127,8 @@ auth.post('/setup', async (c) => {
     'display_name',
     'default_one_way_fare',
     'default_trip_type',
+    'default_clock_in',
+    'default_clock_out',
   ]);
 
   const setupRate = await c.env.AUTH_RATE_LIMITER.limit({
@@ -148,6 +155,8 @@ auth.post('/setup', async (c) => {
   const displayName = requestedName || username;
   const defaultOneWayFare = optionalFare(body.default_one_way_fare) ?? null;
   const defaultTripType = optionalTripType(body.default_trip_type) ?? 'round_trip';
+  const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
+  const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
   const passwordHash = await hashPassword(password);
   const createdAt = new Date().toISOString();
 
@@ -159,9 +168,11 @@ auth.post('/setup', async (c) => {
        is_admin,
        default_one_way_fare,
        default_trip_type,
+       default_clock_in,
+       default_clock_out,
        created_at
      )
-     SELECT ?, ?, ?, 1, ?, ?, ?
+     SELECT ?, ?, ?, 1, ?, ?, ?, ?, ?
      WHERE NOT EXISTS (SELECT 1 FROM users)
      RETURNING
        id,
@@ -170,13 +181,17 @@ auth.post('/setup', async (c) => {
        is_admin,
        created_at,
        default_one_way_fare,
-       default_trip_type`,
+       default_trip_type,
+       default_clock_in,
+       default_clock_out`,
   ).bind(
     username,
     passwordHash,
     displayName,
     defaultOneWayFare,
     defaultTripType,
+    defaultClockIn,
+    defaultClockOut,
     createdAt,
   );
   const setupAudit = c.env.DB.prepare(
@@ -193,6 +208,8 @@ auth.post('/setup', async (c) => {
       is_admin: 1,
       default_one_way_fare: defaultOneWayFare,
       default_trip_type: defaultTripType,
+      default_clock_in: defaultClockIn,
+      default_clock_out: defaultClockOut,
     }),
     username,
     createdAt,
@@ -237,7 +254,9 @@ auth.post('/login', async (c) => {
        is_admin,
        created_at,
        default_one_way_fare,
-       default_trip_type
+       default_trip_type,
+       default_clock_in,
+       default_clock_out
      FROM users
      WHERE username = ?
      LIMIT 1`,
@@ -289,7 +308,7 @@ auth.get('/me', authMiddleware, (c) => c.json(toPublicUser(c.get('user'))));
 auth.patch('/profile', authMiddleware, async (c) => {
   const currentUser = c.get('user');
   const body = await readJsonObject(c.req.raw);
-  assertOnlyKeys(body, ['display_name', 'default_one_way_fare', 'default_trip_type']);
+  assertOnlyKeys(body, ['display_name', 'default_one_way_fare', 'default_trip_type', 'default_clock_in', 'default_clock_out']);
 
   const assignments: string[] = [];
   const values: Array<string | number | null> = [];
@@ -309,6 +328,16 @@ auth.patch('/profile', authMiddleware, async (c) => {
     values.push(tripTypeValue(body.default_trip_type));
   }
 
+  if (body.default_clock_in !== undefined) {
+    assignments.push('default_clock_in = ?');
+    values.push(nullableTime(body.default_clock_in, '默认出勤时间') ?? null);
+  }
+
+  if (body.default_clock_out !== undefined) {
+    assignments.push('default_clock_out = ?');
+    values.push(nullableTime(body.default_clock_out, '默认退勤时间') ?? null);
+  }
+
   if (assignments.length === 0) {
     throw new RequestValidationError('请至少提交一个可修改字段');
   }
@@ -325,7 +354,9 @@ auth.patch('/profile', authMiddleware, async (c) => {
        is_admin,
        created_at,
        default_one_way_fare,
-       default_trip_type`,
+       default_trip_type,
+       default_clock_in,
+       default_clock_out`,
   )
     .bind(...values);
   const afterForAudit = {
@@ -336,6 +367,12 @@ auth.patch('/profile', authMiddleware, async (c) => {
       : {}),
     ...(body.default_trip_type !== undefined
       ? { default_trip_type: tripTypeValue(body.default_trip_type) }
+      : {}),
+    ...(body.default_clock_in !== undefined
+      ? { default_clock_in: nullableTime(body.default_clock_in, '默认出勤时间') ?? null }
+      : {}),
+    ...(body.default_clock_out !== undefined
+      ? { default_clock_out: nullableTime(body.default_clock_out, '默认退勤时间') ?? null }
       : {}),
   };
   const results = await c.env.DB.batch([

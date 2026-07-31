@@ -15,6 +15,8 @@
     default_break_minutes: 60,
     default_one_way_fare: 210,
     default_trip_type: 'round_trip',
+    default_clock_in: '10:00',
+    default_clock_out: '19:00',
     overtime_threshold_hours: 180,
   });
 
@@ -156,6 +158,8 @@
         default_break_minutes: boundedInteger(source.default_break_minutes, DEFAULT_CONFIG.default_break_minutes, 0, 480),
         default_one_way_fare: boundedInteger(source.default_one_way_fare, DEFAULT_CONFIG.default_one_way_fare, 0, 100000),
         default_trip_type: normalizeTripType(source.default_trip_type) || DEFAULT_CONFIG.default_trip_type,
+        default_clock_in: validTime(source.default_clock_in) || DEFAULT_CONFIG.default_clock_in,
+        default_clock_out: validTime(source.default_clock_out) || DEFAULT_CONFIG.default_clock_out,
         overtime_threshold_hours: boundedInteger(source.overtime_threshold_hours, DEFAULT_CONFIG.overtime_threshold_hours, 0, 744),
       };
     } catch (error) {
@@ -312,6 +316,8 @@
     byId('profile-display-name').value = state.user.display_name;
     byId('profile-one-way-fare').value = String(userOneWayFare());
     byId('profile-trip-type').value = userTripType();
+    byId('profile-clock-in').value = userClockIn();
+    byId('profile-clock-out').value = userClockOut();
   }
 
   function applyConfigDefaults() {
@@ -663,6 +669,8 @@
       display_name: displayName,
       default_one_way_fare: integerInput(byId('profile-one-way-fare'), state.config.default_one_way_fare, 0, 100000),
       default_trip_type: normalizeTripType(byId('profile-trip-type').value) || 'round_trip',
+      default_clock_in: validTime(byId('profile-clock-in').value) || null,
+      default_clock_out: validTime(byId('profile-clock-out').value) || null,
     };
     await withBusy(event.submitter, '保存中…', async () => {
       try {
@@ -790,8 +798,8 @@
     byId('record-date').value = record.work_date;
     byId('record-date-context').textContent = `${formatJapaneseDate(record.work_date)}（${WEEKDAYS[record.day_of_week] || ''}）${record.holiday_name ? `　${record.holiday_name}` : ''}`;
     byId('record-work-type').value = defaultType;
-    byId('record-clock-in').value = record.persisted ? (record.clock_in || '') : '';
-    byId('record-clock-out').value = record.persisted ? (record.clock_out || '') : '';
+    byId('record-clock-in').value = record.persisted ? (record.clock_in || '') : userClockIn();
+    byId('record-clock-out').value = record.persisted ? (record.clock_out || '') : userClockOut();
     byId('record-break').value = String(record.persisted ? record.break_minutes : state.config.default_break_minutes);
     byId('record-one-way-fare').value = String(record.persisted ? record.transport_one_way_fee : userOneWayFare());
     byId('record-trip-type').value = record.persisted
@@ -824,6 +832,8 @@
     } else {
       if (previousType && !isWorking(previousType)) {
         byId('record-break').value = String(state.config.default_break_minutes);
+        byId('record-clock-in').value = userClockIn();
+        byId('record-clock-out').value = userClockOut();
       }
       if (office && previousType && previousType !== 'office') {
         byId('record-one-way-fare').value = String(userOneWayFare());
@@ -1281,6 +1291,8 @@
         ? null
         : boundedInteger(source.default_one_way_fare, state.config.default_one_way_fare, 0, 100000),
       default_trip_type: normalizeTripType(source.default_trip_type) || state.config.default_trip_type,
+      default_clock_in: validTime(source.default_clock_in) || null,
+      default_clock_out: validTime(source.default_clock_out) || null,
     };
   }
 
@@ -1290,6 +1302,14 @@
 
   function userTripType() {
     return normalizeTripType(state.user?.default_trip_type) || state.config.default_trip_type;
+  }
+
+  function userClockIn() {
+    return state.user?.default_clock_in || state.config.default_clock_in || '';
+  }
+
+  function userClockOut() {
+    return state.user?.default_clock_out || state.config.default_clock_out || '';
   }
 
   function normalizeWorkType(value) {
