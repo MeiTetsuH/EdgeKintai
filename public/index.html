@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#101419">
+    <title>勤怠表</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/excel.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">本文へ移動</a>
+
+    <div id="loading-view" class="centered-view">
+      <div class="loading-card" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>勤怠データを読み込んでいます</span>
+      </div>
+    </div>
+
+    <main id="auth-view" class="auth-shell" hidden>
+      <section class="auth-card" aria-labelledby="auth-title">
+        <div class="brand-mark" aria-hidden="true">勤</div>
+        <p class="eyebrow">Cloudflare Workers</p>
+        <h1 id="auth-title">勤怠表</h1>
+        <p id="auth-description" class="muted">ログインして勤務時間を記録します。</p>
+
+        <form id="login-form" class="stack" novalidate>
+          <div class="field">
+            <label for="login-username">ログイン名</label>
+            <input id="login-username" name="username" type="text" autocomplete="username" maxlength="64" required>
+          </div>
+          <div class="field">
+            <label for="login-password">パスワード</label>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+          </div>
+          <button class="button button-primary button-wide" type="submit">ログイン</button>
+        </form>
+
+        <form id="setup-form" class="stack" hidden novalidate>
+          <div class="notice notice-warning">
+            初回セットアップです。デプロイ時に設定したセットアップトークンを入力してください。
+          </div>
+          <div class="field">
+            <label for="setup-token">セットアップトークン</label>
+            <input id="setup-token" name="setup_token" type="password" autocomplete="off" maxlength="4096" required>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="setup-username">ログイン名</label>
+              <input id="setup-username" name="username" type="text" autocomplete="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" required>
+            </div>
+            <div class="field">
+              <label for="setup-display-name">氏名</label>
+              <input id="setup-display-name" name="display_name" type="text" autocomplete="name" maxlength="80" required>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="setup-password">パスワード</label>
+              <input id="setup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+            </div>
+            <div class="field">
+              <label for="setup-password-confirm">パスワード（確認）</label>
+              <input id="setup-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="setup-fare">既定の片道運賃（円）</label>
+              <input id="setup-fare" name="default_one_way_fare" type="number" inputmode="numeric" min="0" max="100000" step="1">
+            </div>
+            <div class="field">
+              <label for="setup-trip-type">既定の交通区分</label>
+              <select id="setup-trip-type" name="default_trip_type">
+                <option value="round_trip">往復</option>
+                <option value="one_way">片道</option>
+              </select>
+            </div>
+          </div>
+          <button class="button button-primary button-wide" type="submit">管理者を作成して開始</button>
+        </form>
+      </section>
+    </main>
+
+    <div id="app-view" class="app-shell" hidden>
+      <header class="app-header">
+        <div class="header-brand">
+          <span class="brand-mark brand-mark-small" aria-hidden="true">勤</span>
+          <div>
+            <p class="eyebrow">Attendance</p>
+            <strong>勤怠表</strong>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="user-chip">
+            <span id="header-user-name"></span>
+            <span id="header-user-role" class="role-badge"></span>
+          </div>
+          <button id="theme-button" class="icon-button" type="button" aria-label="表示テーマを切り替える">◐</button>
+          <button id="logout-button" class="button button-quiet" type="button">ログアウト</button>
+        </div>
+      </header>
+
+      <nav class="primary-nav" aria-label="メインメニュー">
+        <button class="nav-button is-active" type="button" data-page="today">今日</button>
+        <button class="nav-button" type="button" data-page="calendar">カレンダー</button>
+        <button class="nav-button" type="button" data-page="summary">月次集計</button>
+        <button class="nav-button" type="button" data-page="settings">個人設定</button>
+        <button id="admin-nav-button" class="nav-button" type="button" data-page="admin" hidden>管理</button>
+      </nav>
+
+      <main id="main-content" class="main-content" tabindex="-1">
+        <section id="page-today" class="page is-active" data-page-panel="today" aria-labelledby="today-title">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h1 id="today-title">今日の勤務</h1>
+            </div>
+            <div class="live-clock" aria-label="現在の日本時間">
+              <time id="current-time">--:--:--</time>
+              <span>JST</span>
+            </div>
+          </div>
+
+          <div id="today-calendar-status" class="date-banner">
+            <div>
+              <strong id="today-date">----</strong>
+              <span id="today-weekday"></span>
+            </div>
+            <span id="today-holiday" class="holiday-label"></span>
+          </div>
+
+          <div class="dashboard-grid">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Current record</p>
+                  <h2>本日の記録</h2>
+                </div>
+                <span id="today-record-badge" class="status-badge">未打刻</span>
+              </div>
+              <dl class="record-facts">
+                <div><dt>勤務区分</dt><dd id="today-record-type">未設定</dd></div>
+                <div><dt>出勤</dt><dd id="today-record-in">--:--</dd></div>
+                <div><dt>退勤</dt><dd id="today-record-out">--:--</dd></div>
+                <div><dt>休憩</dt><dd id="today-record-break">0分</dd></div>
+                <div><dt>交通費</dt><dd id="today-record-fare">¥0</dd></div>
+                <div><dt>実働</dt><dd id="today-record-work">0:00</dd></div>
+              </dl>
+              <div class="button-row">
+                <button id="clock-out-button" class="button button-danger" type="button">退勤する</button>
+                <button id="edit-today-button" class="button" type="button">記録を修正</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Clock in</p>
+                  <h2>出勤を記録</h2>
+                </div>
+              </div>
+              <form id="clock-in-form" class="stack compact" novalidate>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="clock-work-type">勤務区分</label>
+                    <select id="clock-work-type" name="work_type">
+                      <option value="office">出社</option>
+                      <option value="remote">在宅</option>
+                      <option value="paid_leave">有給</option>
+                      <option value="holiday">休日</option>
+                      <option value="absent">欠勤</option>
+                    </select>
+                  </div>
+                  <div class="field" data-working-field>
+                    <label for="clock-in-time">出勤時刻</label>
+                    <input id="clock-in-time" name="clock_in" type="time" step="60">
+                  </div>
+                </div>
+                <div class="field-grid">
+                  <div class="field" data-working-field>
+                    <label for="clock-break">休憩（分）</label>
+                    <input id="clock-break" name="break_minutes" type="number" inputmode="numeric" min="0" max="480" step="1">
+                  </div>
+                  <div class="field" data-office-field>
+                    <label for="clock-one-way-fare">片道運賃（円）</label>
+                    <input id="clock-one-way-fare" name="transport_one_way_fee" type="number" inputmode="numeric" min="0" max="100000" step="1">
+                  </div>
+                </div>
+                <div class="field-grid">
+                  <div class="field" data-office-field>
+                    <label for="clock-trip-type">交通区分</label>
+                    <select id="clock-trip-type" name="transport_trip_type">
+                      <option value="round_trip">往復</option>
+                      <option value="one_way">片道</option>
+                    </select>
+                  </div>
+                  <div class="fare-preview" data-office-field>
+                    <span>交通費合計</span>
+                    <strong id="clock-fare-preview">¥0</strong>
+                  </div>
+                </div>
+                <button id="clock-in-button" class="button button-primary button-wide" type="submit">出勤する</button>
+              </form>
+            </article>
+          </div>
+        </section>
+
+        <section id="page-calendar" class="page" data-page-panel="calendar" aria-labelledby="calendar-title" hidden>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Calendar</p>
+              <h1 id="calendar-title">勤務カレンダー</h1>
+            </div>
+            <div class="month-control">
+              <button class="icon-button" type="button" data-month-target="calendar" data-month-delta="-1" aria-label="前月">‹</button>
+              <input id="calendar-month" type="month" min="1955-01" max="2100-12" aria-label="表示月">
+              <button class="icon-button" type="button" data-month-target="calendar" data-month-delta="1" aria-label="翌月">›</button>
+            </div>
+          </div>
+          <div class="panel calendar-panel">
+            <div id="calendar-grid" class="calendar-grid" aria-label="月間勤務カレンダー"></div>
+          </div>
+          <p class="hint">日付を選ぶと、その日の勤務を補録・修正できます。</p>
+        </section>
+
+        <section id="page-summary" class="page" data-page-panel="summary" aria-labelledby="summary-title" hidden>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Monthly report</p>
+              <h1 id="summary-title">月次集計</h1>
+            </div>
+            <div class="month-control">
+              <button class="icon-button" type="button" data-month-target="summary" data-month-delta="-1" aria-label="前月">‹</button>
+              <input id="summary-month" type="month" min="1955-01" max="2100-12" aria-label="集計月">
+              <button class="icon-button" type="button" data-month-target="summary" data-month-delta="1" aria-label="翌月">›</button>
+            </div>
+          </div>
+
+          <div id="summary-metrics" class="metric-grid"></div>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Details</p>
+                <h2>日別明細</h2>
+              </div>
+              <button id="download-excel-button" class="button button-primary" type="button">Excelを作成</button>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">日付</th>
+                    <th scope="col">区分</th>
+                    <th scope="col">出勤</th>
+                    <th scope="col">退勤</th>
+                    <th scope="col">休憩</th>
+                    <th scope="col">実働</th>
+                    <th scope="col">片道</th>
+                    <th scope="col">交通</th>
+                    <th scope="col">合計</th>
+                  </tr>
+                </thead>
+                <tbody id="summary-table-body"></tbody>
+              </table>
+            </div>
+            <div id="holiday-source-note" class="source-note"></div>
+          </section>
+        </section>
+
+        <section id="page-settings" class="page" data-page-panel="settings" aria-labelledby="settings-title" hidden>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Personal settings</p>
+              <h1 id="settings-title">個人設定</h1>
+            </div>
+          </div>
+
+          <div class="settings-grid">
+            <section class="panel">
+              <div class="panel-heading"><h2>プロフィールと交通費</h2></div>
+              <form id="profile-form" class="stack" novalidate>
+                <div class="field">
+                  <label for="profile-username">ログイン名</label>
+                  <input id="profile-username" type="text" readonly aria-describedby="username-help">
+                  <small id="username-help">ログイン名は管理上の識別子のため変更できません。</small>
+                </div>
+                <div class="field">
+                  <label for="profile-display-name">氏名</label>
+                  <input id="profile-display-name" type="text" autocomplete="name" maxlength="80" required>
+                </div>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="profile-one-way-fare">既定の片道運賃（円）</label>
+                    <input id="profile-one-way-fare" type="number" inputmode="numeric" min="0" max="100000" step="1">
+                  </div>
+                  <div class="field">
+                    <label for="profile-trip-type">既定の交通区分</label>
+                    <select id="profile-trip-type">
+                      <option value="round_trip">往復</option>
+                      <option value="one_way">片道</option>
+                    </select>
+                  </div>
+                </div>
+                <button class="button button-primary" type="submit">設定を保存</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading"><h2>過去の勤務を補録・修正</h2></div>
+              <p class="muted section-copy">日付を選ぶか、最近の記録からすぐに編集できます。</p>
+              <form id="quick-edit-form" class="quick-edit" novalidate>
+                <div class="field">
+                  <label for="quick-edit-date">編集する日付</label>
+                  <input id="quick-edit-date" type="date" min="1955-01-01" max="2100-12-31" required>
+                </div>
+                <button class="button" type="submit">この日を編集</button>
+              </form>
+              <h3 class="subheading">最近の記録</h3>
+              <div id="recent-records" class="recent-records"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading"><h2>パスワード変更</h2></div>
+              <form id="password-form" class="stack" novalidate>
+                <div class="field">
+                  <label for="current-password">現在のパスワード</label>
+                  <input id="current-password" type="password" autocomplete="current-password" maxlength="128" required>
+                </div>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="new-password">新しいパスワード</label>
+                    <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                  </div>
+                  <div class="field">
+                    <label for="new-password-confirm">新しいパスワード（確認）</label>
+                    <input id="new-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                  </div>
+                </div>
+                <button class="button" type="submit">パスワードを変更</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="page-admin" class="page" data-page-panel="admin" aria-labelledby="admin-title" hidden>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Administration</p>
+              <h1 id="admin-title">管理</h1>
+            </div>
+            <div class="month-control">
+              <button class="icon-button" type="button" data-month-target="admin" data-month-delta="-1" aria-label="前月">‹</button>
+              <input id="admin-month" type="month" min="1955-01" max="2100-12" aria-label="管理対象月">
+              <button class="icon-button" type="button" data-month-target="admin" data-month-delta="1" aria-label="翌月">›</button>
+            </div>
+          </div>
+
+          <div class="admin-grid">
+            <section class="panel">
+              <div class="panel-heading"><h2>ユーザー追加</h2></div>
+              <form id="admin-add-user-form" class="stack compact" novalidate>
+                <div class="field-grid">
+                  <div class="field"><label for="admin-new-username">ログイン名</label><input id="admin-new-username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" required></div>
+                  <div class="field"><label for="admin-new-name">氏名</label><input id="admin-new-name" type="text" maxlength="80" required></div>
+                </div>
+                <div class="field-grid">
+                  <div class="field"><label for="admin-new-password">初期パスワード</label><input id="admin-new-password" type="password" minlength="12" maxlength="128" required></div>
+                  <div class="field"><label for="admin-new-fare">片道運賃（円）</label><input id="admin-new-fare" type="number" min="0" max="100000" step="1"></div>
+                </div>
+                <div class="inline-options">
+                  <label><input id="admin-new-round-trip" type="checkbox" checked> 既定は往復</label>
+                  <label><input id="admin-new-is-admin" type="checkbox"> 管理者として作成</label>
+                </div>
+                <button class="button button-primary" type="submit">ユーザーを追加</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading"><h2>ユーザー一覧</h2></div>
+              <div class="table-scroll">
+                <table>
+                  <thead><tr><th scope="col">氏名</th><th scope="col">ログイン名</th><th scope="col">権限</th><th scope="col">操作</th></tr></thead>
+                  <tbody id="admin-user-list"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <div class="panel-heading"><h2>月次勤務概要</h2></div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th scope="col">氏名</th><th scope="col">出社</th><th scope="col">在宅</th><th scope="col">有給</th><th scope="col">実働</th><th scope="col">交通費</th></tr></thead>
+                <tbody id="admin-overview-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="record-dialog" class="record-dialog" aria-labelledby="record-dialog-title">
+      <form id="record-form" method="dialog" novalidate>
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">Record editor</p>
+            <h2 id="record-dialog-title">勤務記録を編集</h2>
+          </div>
+          <button id="close-record-dialog" class="icon-button" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div id="record-date-context" class="date-context"></div>
+        <input id="record-date" type="hidden">
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="record-work-type">勤務区分</label>
+            <select id="record-work-type">
+              <option value="office">出社</option>
+              <option value="remote">在宅</option>
+              <option value="paid_leave">有給</option>
+              <option value="holiday">休日</option>
+              <option value="absent">欠勤</option>
+            </select>
+          </div>
+          <div class="field" data-record-working-field>
+            <label for="record-break">休憩（分）</label>
+            <input id="record-break" type="number" min="0" max="480" step="1">
+          </div>
+        </div>
+        <div class="field-grid" data-record-working-field>
+          <div class="field"><label for="record-clock-in">出勤</label><input id="record-clock-in" type="time" step="60"></div>
+          <div class="field"><label for="record-clock-out">退勤</label><input id="record-clock-out" type="time" step="60"></div>
+        </div>
+        <div class="field-grid">
+          <div class="field" data-record-office-field><label for="record-one-way-fare">片道運賃（円）</label><input id="record-one-way-fare" type="number" min="0" max="100000" step="1"></div>
+          <div class="field" data-record-office-field>
+            <label for="record-trip-type">交通区分</label>
+            <select id="record-trip-type"><option value="round_trip">往復</option><option value="one_way">片道</option></select>
+          </div>
+        </div>
+        <div class="fare-preview" data-record-office-field><span>交通費合計</span><strong id="record-fare-preview">¥0</strong></div>
+        <div class="field">
+          <label for="record-memo">備考</label>
+          <textarea id="record-memo" rows="3" maxlength="500"></textarea>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-record-button" class="button button-danger" type="button">記録を削除</button>
+          <div class="button-row">
+            <button id="cancel-record-button" class="button" type="button">キャンセル</button>
+            <button class="button button-primary" type="submit">保存</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

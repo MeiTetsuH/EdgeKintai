@@ -1,0 +1,2 @@
+# Local development only. Generate a unique value; never reuse this example.
+SETUP_TOKEN=change-me

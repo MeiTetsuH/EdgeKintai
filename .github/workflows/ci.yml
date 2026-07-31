@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Worker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 24.11.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.11.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Apply migrations to local D1
+        run: npm run db:migrate:local
+
+      - name: Run type generation, type checks, and tests
+        run: npm run verify
+
+      - name: Build a Cloudflare deployment without publishing
+        run: npm run deploy:dry-run

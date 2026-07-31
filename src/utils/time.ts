@@ -1,0 +1,96 @@
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+export function nowJST(now = new Date()): Date {
+  return new Date(now.getTime() + JST_OFFSET_MS);
+}
+
+export function todayJST(now = new Date()): string {
+  return formatDate(nowJST(now));
+}
+
+export function formatDate(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function formatTime(date: Date): string {
+  const hours = String(date.getUTCHours()).padStart(2, '0');
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+export function nowTimeJST(now = new Date()): string {
+  return formatTime(nowJST(now));
+}
+
+export function timeToMinutes(time: string): number {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+export function minutesToHHMM(minutes: number): string {
+  const safeMinutes = Math.max(0, Math.trunc(minutes));
+  const hours = Math.floor(safeMinutes / 60);
+  const remainder = String(safeMinutes % 60).padStart(2, '0');
+  return `${hours}:${remainder}`;
+}
+
+/** Supports a shift ending after midnight, for example 22:00 -> 06:00. */
+export function calcWorkMinutes(clockIn: string, clockOut: string, breakMinutes: number): number {
+  const inMinutes = timeToMinutes(clockIn);
+  let outMinutes = timeToMinutes(clockOut);
+  if (outMinutes < inMinutes) outMinutes += 24 * 60;
+  return Math.max(0, outMinutes - inMinutes - breakMinutes);
+}
+
+export function dayOfWeek(date: string): number {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+export function previousDate(date: string): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const value = new Date(Date.UTC(year, month - 1, day));
+  value.setUTCDate(value.getUTCDate() - 1);
+  return formatDate(value);
+}
+
+export function dayOfWeekJa(day: number): string {
+  return ['日', '月', '火', '水', '木', '金', '土'][day] ?? '';
+}
+
+export function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+export function nextMonthStart(year: number, month: number): string {
+  if (month === 12) return `${year + 1}-01-01`;
+  return `${year}-${String(month + 1).padStart(2, '0')}-01`;
+}
+
+export function monthStart(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}-01`;
+}
+
+export function isValidTime(value: string): boolean {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return false;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
+
+export function isValidDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1955 || year > 2100 || month < 1 || month > 12 || day < 1) return false;
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  return candidate.getUTCFullYear() === year
+    && candidate.getUTCMonth() + 1 === month
+    && candidate.getUTCDate() === day;
+}

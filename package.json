@@ -1,0 +1,47 @@
+{
+  "name": "edge-kintai",
+  "version": "1.0.0",
+  "description": "Cloudflare-native attendance tracker for Japan",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workHMZ/EdgeKintai.git"
+  },
+  "engines": {
+    "node": ">=24.11.0 <25"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "npm run cf-typegen && npm run typecheck",
+    "deploy": "npm run db:migrate:remote && wrangler deploy",
+    "deploy:dry-run": "npm run build && wrangler deploy --dry-run",
+    "deploy:cf": "node scripts/deploy-cloudflare.mjs",
+    "deploy:cf:check": "node --check scripts/deploy-cloudflare.mjs && node scripts/deploy-cloudflare.mjs --check",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "cf-typegen": "wrangler types worker-configuration.d.ts --env-interface CloudflareBindings --include-runtime=false --strict-vars=false --env-file .dev.vars.example",
+    "cf-typegen:check": "npm run cf-typegen -- --check",
+    "typecheck": "tsc --noEmit",
+    "test:excel": "node scripts/test-excel.mjs",
+    "test": "vitest run",
+    "verify": "npm run build && npm run cf-typegen:check && npm run deploy:cf:check && npm run test:excel && npm test"
+  },
+  "dependencies": {
+    "hono": "^4.12.31"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.18.8",
+    "@cloudflare/workers-types": "5.20260731.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.1.10",
+    "wrangler": "^4.116.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SETUP_TOKEN": {
+        "description": "Required one-time bootstrap secret. Generate with: openssl rand -hex 32"
+      }
+    }
+  }
+}
