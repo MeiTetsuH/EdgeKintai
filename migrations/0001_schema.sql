@@ -1,19 +1,39 @@
--- EdgeKintai final schema. The pre-release demo database is intentionally not
--- upgrade-compatible; deploy this schema to a new `edge-kintai-db` database.
+-- EdgeKintai 2.0 final schema.
+-- This release intentionally targets a fresh D1 database. It does not include
+-- compatibility logic for the pre-release demo schema or migration history.
 
 CREATE TABLE users (
-  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-  username             TEXT NOT NULL UNIQUE,
-  password_hash        TEXT NOT NULL,
-  display_name         TEXT NOT NULL,
-  is_admin             INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
-  default_one_way_fare INTEGER CHECK (
+  id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username                      TEXT NOT NULL UNIQUE,
+  password_hash                 TEXT NOT NULL,
+  display_name                  TEXT NOT NULL,
+  is_admin                      INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
+  default_one_way_fare          INTEGER CHECK (
     default_one_way_fare IS NULL
     OR default_one_way_fare BETWEEN 0 AND 100000
   ),
-  default_trip_type    TEXT NOT NULL DEFAULT 'round_trip'
+  default_trip_type             TEXT NOT NULL DEFAULT 'round_trip'
     CHECK (default_trip_type IN ('one_way', 'round_trip')),
-  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  default_transport_mode        TEXT NOT NULL DEFAULT 'rail'
+    CHECK (default_transport_mode IN ('rail', 'bus', 'taxi', 'other')),
+  default_transport_origin      TEXT NOT NULL DEFAULT ''
+    CHECK (length(default_transport_origin) <= 120),
+  default_transport_destination TEXT NOT NULL DEFAULT ''
+    CHECK (length(default_transport_destination) <= 120),
+  default_clock_in              TEXT CHECK (
+    default_clock_in IS NULL OR (
+      default_clock_in GLOB '[0-2][0-9]:[0-5][0-9]'
+      AND CAST(substr(default_clock_in, 1, 2) AS INTEGER) <= 23
+    )
+  ),
+  default_clock_out             TEXT CHECK (
+    default_clock_out IS NULL OR (
+      default_clock_out GLOB '[0-2][0-9]:[0-5][0-9]'
+      AND CAST(substr(default_clock_out, 1, 2) AS INTEGER) <= 23
+    )
+  ),
+  auth_version                  INTEGER NOT NULL DEFAULT 1 CHECK (auth_version >= 1),
+  created_at                    TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK (length(username) BETWEEN 3 AND 64),
   CHECK (username NOT GLOB '*[^A-Za-z0-9._-]*'),
   CHECK (length(display_name) BETWEEN 1 AND 80)
@@ -49,6 +69,12 @@ CREATE TABLE attendance (
     CHECK (transport_one_way_fee BETWEEN 0 AND 100000),
   transport_trip_type       TEXT NOT NULL DEFAULT 'round_trip'
     CHECK (transport_trip_type IN ('one_way', 'round_trip')),
+  transport_mode            TEXT NOT NULL DEFAULT 'rail'
+    CHECK (transport_mode IN ('rail', 'bus', 'taxi', 'other')),
+  transport_origin          TEXT NOT NULL DEFAULT ''
+    CHECK (length(transport_origin) <= 120),
+  transport_destination     TEXT NOT NULL DEFAULT ''
+    CHECK (length(transport_destination) <= 120),
   memo                      TEXT NOT NULL DEFAULT '' CHECK (length(memo) <= 500),
   created_at                TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at                TEXT NOT NULL DEFAULT (datetime('now')),
@@ -108,22 +134,28 @@ CREATE TABLE holiday_sync_failures (
 );
 
 CREATE TABLE sessions (
-  token_id          TEXT PRIMARY KEY,
-  user_id           INTEGER NOT NULL,
-  expires_at        TEXT NOT NULL,
+  token_id           TEXT PRIMARY KEY,
+  user_id            INTEGER NOT NULL,
+  expires_at         TEXT NOT NULL,
   reauthenticated_at TEXT,
   reauth_token_hash  TEXT,
-  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  auth_version       INTEGER NOT NULL DEFAULT 1 CHECK (auth_version >= 1),
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_attendance_user_date ON attendance(user_id, work_date);
 CREATE INDEX idx_attendance_date_user ON attendance(work_date, user_id);
-CREATE INDEX idx_holidays_year ON holidays_cache(year);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX idx_sessions_user ON sessions(user_id);
 CREATE INDEX idx_audit_target_created ON audit_logs(target_user_id, created_at);
 CREATE INDEX idx_audit_actor_created ON audit_logs(actor_user_id, created_at);
+
+CREATE TRIGGER users_username_immutable
+BEFORE UPDATE OF username ON users
+WHEN NEW.username <> OLD.username
+BEGIN
+  SELECT RAISE(ABORT, 'username is immutable');
+END;
 
 CREATE TRIGGER users_preserve_last_admin_update
 BEFORE UPDATE OF is_admin ON users
@@ -141,8 +173,9 @@ BEGIN
   SELECT RAISE(ABORT, 'cannot delete last administrator');
 END;
 
--- Attendance audit rows are written by SQLite triggers, making every business
--- mutation and its audit record one atomic D1 transaction.
+-- Exact origin and destination text is intentionally excluded from audit JSON.
+-- It remains only on the current attendance row to minimize retained copies of
+-- potentially private commute locations.
 CREATE TRIGGER attendance_audit_insert
 AFTER INSERT ON attendance
 BEGIN
@@ -163,6 +196,7 @@ BEGIN
       'transport_fee', NEW.transport_fee,
       'transport_one_way_fee', NEW.transport_one_way_fee,
       'transport_trip_type', NEW.transport_trip_type,
+      'transport_mode', NEW.transport_mode,
       'memo', NEW.memo
     )
   );
@@ -187,6 +221,7 @@ BEGIN
       'transport_fee', OLD.transport_fee,
       'transport_one_way_fee', OLD.transport_one_way_fee,
       'transport_trip_type', OLD.transport_trip_type,
+      'transport_mode', OLD.transport_mode,
       'memo', OLD.memo
     ),
     json_object(
@@ -197,6 +232,7 @@ BEGIN
       'transport_fee', NEW.transport_fee,
       'transport_one_way_fee', NEW.transport_one_way_fee,
       'transport_trip_type', NEW.transport_trip_type,
+      'transport_mode', NEW.transport_mode,
       'memo', NEW.memo
     )
   );
@@ -221,6 +257,7 @@ BEGIN
       'transport_fee', OLD.transport_fee,
       'transport_one_way_fee', OLD.transport_one_way_fee,
       'transport_trip_type', OLD.transport_trip_type,
+      'transport_mode', OLD.transport_mode,
       'memo', OLD.memo
     ),
     NULL

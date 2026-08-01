@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   existsSync,
+  readdirSync,
   readFileSync,
   renameSync,
   statSync,
@@ -15,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const configPath = join(projectRoot, 'wrangler.jsonc');
+const migrationsPath = join(projectRoot, 'migrations');
 const safeEnvFile = join(projectRoot, '.dev.vars.example');
 const wranglerExecutable = join(
   projectRoot,
@@ -24,7 +26,7 @@ const wranglerExecutable = join(
 );
 const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-const databaseName = 'edge-kintai-db';
+const databaseName = 'edge-kintai-db-v2';
 const databaseIdPlaceholder = '00000000-0000-0000-0000-000000000000';
 const setupSecretName = 'SETUP_TOKEN';
 const weeklyHolidayCron = '0 18 * * 1';
@@ -91,6 +93,13 @@ function parseJsonOutput(label, result) {
 function readConfiguration() {
   if (!existsSync(configPath)) throw new Error('wrangler.jsonc 不存在');
   const source = readFileSync(configPath, 'utf8');
+
+  const migrationFiles = existsSync(migrationsPath)
+    ? readdirSync(migrationsPath).filter((name) => name.endsWith('.sql')).sort()
+    : [];
+  if (migrationFiles.length !== 1 || migrationFiles[0] !== '0001_schema.sql') {
+    throw new Error('2.0 必须且只能包含 migrations/0001_schema.sql');
+  }
 
   if (/"cpu_ms"\s*:/.test(source)) {
     throw new Error(

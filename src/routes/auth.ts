@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import type { TransportTripType, User } from '../types';
+import type { TransportMode, TransportTripType, User } from '../types';
+import { stringifyAuditJson } from '../utils/audit';
 import { hashPassword, verifyPassword, verifySecret } from '../utils/password';
 import {
   authMiddleware,
@@ -14,11 +15,12 @@ import {
 } from '../middleware/auth';
 import {
   boundedInteger,
+  displayNameValue,
   optionalString,
   passwordValue,
   readJsonObject,
   RequestValidationError,
-  requiredString,
+  transportModeValue,
   tripTypeValue,
   usernameValue,
   nullableTime,
@@ -37,6 +39,9 @@ type PublicUser = Pick<
   | 'is_admin'
   | 'default_one_way_fare'
   | 'default_trip_type'
+  | 'default_transport_mode'
+  | 'default_transport_origin'
+  | 'default_transport_destination'
   | 'default_clock_in'
   | 'default_clock_out'
 >;
@@ -60,6 +65,9 @@ function toPublicUser(user: User): PublicUser {
     is_admin: user.is_admin,
     default_one_way_fare: user.default_one_way_fare,
     default_trip_type: user.default_trip_type,
+    default_transport_mode: user.default_transport_mode,
+    default_transport_origin: user.default_transport_origin,
+    default_transport_destination: user.default_transport_destination,
     default_clock_in: user.default_clock_in,
     default_clock_out: user.default_clock_out,
   };
@@ -98,6 +106,10 @@ function optionalTripType(value: unknown): TransportTripType | undefined {
   return value === undefined ? undefined : tripTypeValue(value);
 }
 
+function optionalTransportMode(value: unknown): TransportMode | undefined {
+  return value === undefined ? undefined : transportModeValue(value);
+}
+
 auth.use('*', async (c, next) => {
   c.header('Cache-Control', 'no-store');
   await next();
@@ -127,6 +139,9 @@ auth.post('/setup', async (c) => {
     'display_name',
     'default_one_way_fare',
     'default_trip_type',
+    'default_transport_mode',
+    'default_transport_origin',
+    'default_transport_destination',
     'default_clock_in',
     'default_clock_out',
   ]);
@@ -152,9 +167,12 @@ auth.post('/setup', async (c) => {
   const username = usernameValue(body.username);
   const password = passwordValue(body.password);
   const requestedName = optionalString(body.display_name, '姓名', 80);
-  const displayName = requestedName || username;
+  const displayName = requestedName ? displayNameValue(requestedName) : username;
   const defaultOneWayFare = optionalFare(body.default_one_way_fare) ?? null;
   const defaultTripType = optionalTripType(body.default_trip_type) ?? 'round_trip';
+  const defaultTransportMode = optionalTransportMode(body.default_transport_mode) ?? 'rail';
+  const defaultTransportOrigin = optionalString(body.default_transport_origin, '出发地', 120) ?? '';
+  const defaultTransportDestination = optionalString(body.default_transport_destination, '到达地', 120) ?? '';
   const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
   const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
   const passwordHash = await hashPassword(password);
@@ -168,11 +186,14 @@ auth.post('/setup', async (c) => {
        is_admin,
        default_one_way_fare,
        default_trip_type,
+       default_transport_mode,
+       default_transport_origin,
+       default_transport_destination,
        default_clock_in,
        default_clock_out,
        created_at
      )
-     SELECT ?, ?, ?, 1, ?, ?, ?, ?, ?
+     SELECT ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?
      WHERE NOT EXISTS (SELECT 1 FROM users)
      RETURNING
        id,
@@ -182,14 +203,21 @@ auth.post('/setup', async (c) => {
        created_at,
        default_one_way_fare,
        default_trip_type,
+       default_transport_mode,
+       default_transport_origin,
+       default_transport_destination,
        default_clock_in,
-       default_clock_out`,
+       default_clock_out,
+       auth_version`,
   ).bind(
     username,
     passwordHash,
     displayName,
     defaultOneWayFare,
     defaultTripType,
+    defaultTransportMode,
+    defaultTransportOrigin,
+    defaultTransportDestination,
     defaultClockIn,
     defaultClockOut,
     createdAt,
@@ -202,12 +230,15 @@ auth.post('/setup', async (c) => {
      FROM users
      WHERE username = ? AND created_at = ?`,
   ).bind(
-    JSON.stringify({
+    stringifyAuditJson({
       username,
       display_name: displayName,
       is_admin: 1,
       default_one_way_fare: defaultOneWayFare,
       default_trip_type: defaultTripType,
+      default_transport_mode: defaultTransportMode,
+      default_transport_origin: defaultTransportOrigin,
+      default_transport_destination: defaultTransportDestination,
       default_clock_in: defaultClockIn,
       default_clock_out: defaultClockOut,
     }),
@@ -219,7 +250,8 @@ auth.post('/setup', async (c) => {
 
   if (!user) return c.json({ error: '初期设置已完成' }, 403);
 
-  const session = await createSession(c.env, user.id);
+  const session = await createSession(c.env, user.id, user.auth_version);
+  if (!session) throw new Error('Initial session creation failed');
   return c.json(
     { success: true, user: toPublicUser(user) },
     201,
@@ -255,8 +287,12 @@ auth.post('/login', async (c) => {
        created_at,
        default_one_way_fare,
        default_trip_type,
+       default_transport_mode,
+       default_transport_origin,
+       default_transport_destination,
        default_clock_in,
-       default_clock_out
+       default_clock_out,
+       auth_version
      FROM users
      WHERE username = ?
      LIMIT 1`,
@@ -269,7 +305,10 @@ auth.post('/login', async (c) => {
     return c.json({ error: '登录名或密码不正确' }, 401);
   }
 
-  const session = await createSession(c.env, row.id);
+  const session = await createSession(c.env, row.id, row.auth_version);
+  if (!session) {
+    return c.json({ error: '登录状态已更新，请重新尝试' }, 409);
+  }
   return c.json(
     { success: true, user: toPublicUser(row) },
     200,
@@ -308,34 +347,72 @@ auth.get('/me', authMiddleware, (c) => c.json(toPublicUser(c.get('user'))));
 auth.patch('/profile', authMiddleware, async (c) => {
   const currentUser = c.get('user');
   const body = await readJsonObject(c.req.raw);
-  assertOnlyKeys(body, ['display_name', 'default_one_way_fare', 'default_trip_type', 'default_clock_in', 'default_clock_out']);
+  assertOnlyKeys(body, [
+    'display_name',
+    'default_one_way_fare',
+    'default_trip_type',
+    'default_transport_mode',
+    'default_transport_origin',
+    'default_transport_destination',
+    'default_clock_in',
+    'default_clock_out',
+  ]);
 
   const assignments: string[] = [];
   const values: Array<string | number | null> = [];
+  const displayName = body.display_name === undefined
+    ? undefined
+    : displayNameValue(body.display_name);
+  const defaultOneWayFare = optionalFare(body.default_one_way_fare);
+  const defaultTripType = optionalTripType(body.default_trip_type);
+  const defaultTransportMode = optionalTransportMode(body.default_transport_mode);
+  const defaultTransportOrigin = body.default_transport_origin === undefined
+    ? undefined
+    : optionalString(body.default_transport_origin, '出发地', 120) ?? '';
+  const defaultTransportDestination = body.default_transport_destination === undefined
+    ? undefined
+    : optionalString(body.default_transport_destination, '到达地', 120) ?? '';
+  const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间');
+  const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间');
 
-  if (body.display_name !== undefined) {
+  if (displayName !== undefined) {
     assignments.push('display_name = ?');
-    values.push(requiredString(body.display_name, '姓名', 1, 80));
+    values.push(displayName);
   }
 
   if (body.default_one_way_fare !== undefined) {
     assignments.push('default_one_way_fare = ?');
-    values.push(optionalFare(body.default_one_way_fare) ?? null);
+    values.push(defaultOneWayFare ?? null);
   }
 
-  if (body.default_trip_type !== undefined) {
+  if (defaultTripType !== undefined) {
     assignments.push('default_trip_type = ?');
-    values.push(tripTypeValue(body.default_trip_type));
+    values.push(defaultTripType);
+  }
+
+  if (defaultTransportMode !== undefined) {
+    assignments.push('default_transport_mode = ?');
+    values.push(defaultTransportMode);
+  }
+
+  if (defaultTransportOrigin !== undefined) {
+    assignments.push('default_transport_origin = ?');
+    values.push(defaultTransportOrigin);
+  }
+
+  if (defaultTransportDestination !== undefined) {
+    assignments.push('default_transport_destination = ?');
+    values.push(defaultTransportDestination);
   }
 
   if (body.default_clock_in !== undefined) {
     assignments.push('default_clock_in = ?');
-    values.push(nullableTime(body.default_clock_in, '默认出勤时间') ?? null);
+    values.push(defaultClockIn ?? null);
   }
 
   if (body.default_clock_out !== undefined) {
     assignments.push('default_clock_out = ?');
-    values.push(nullableTime(body.default_clock_out, '默认退勤时间') ?? null);
+    values.push(defaultClockOut ?? null);
   }
 
   if (assignments.length === 0) {
@@ -355,24 +432,31 @@ auth.patch('/profile', authMiddleware, async (c) => {
        created_at,
        default_one_way_fare,
        default_trip_type,
+       default_transport_mode,
+       default_transport_origin,
+       default_transport_destination,
        default_clock_in,
-       default_clock_out`,
+       default_clock_out,
+       auth_version`,
   )
     .bind(...values);
   const afterForAudit = {
     ...currentUser,
-    ...(body.display_name !== undefined ? { display_name: values[0] as string } : {}),
+    ...(displayName !== undefined ? { display_name: displayName } : {}),
     ...(body.default_one_way_fare !== undefined
-      ? { default_one_way_fare: optionalFare(body.default_one_way_fare) ?? null }
+      ? { default_one_way_fare: defaultOneWayFare ?? null }
       : {}),
-    ...(body.default_trip_type !== undefined
-      ? { default_trip_type: tripTypeValue(body.default_trip_type) }
+    ...(defaultTripType !== undefined ? { default_trip_type: defaultTripType } : {}),
+    ...(defaultTransportMode !== undefined ? { default_transport_mode: defaultTransportMode } : {}),
+    ...(defaultTransportOrigin !== undefined ? { default_transport_origin: defaultTransportOrigin } : {}),
+    ...(defaultTransportDestination !== undefined
+      ? { default_transport_destination: defaultTransportDestination }
       : {}),
     ...(body.default_clock_in !== undefined
-      ? { default_clock_in: nullableTime(body.default_clock_in, '默认出勤时间') ?? null }
+      ? { default_clock_in: defaultClockIn ?? null }
       : {}),
     ...(body.default_clock_out !== undefined
-      ? { default_clock_out: nullableTime(body.default_clock_out, '默认退勤时间') ?? null }
+      ? { default_clock_out: defaultClockOut ?? null }
       : {}),
   };
   const results = await c.env.DB.batch([
@@ -444,15 +528,29 @@ auth.post('/profile/password', authMiddleware, async (c) => {
   }
 
   const passwordHash = await hashPassword(newPassword);
-  await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE users
+       SET password_hash = ?, auth_version = auth_version + 1
+       WHERE id = ?
+       RETURNING auth_version`,
+    )
       .bind(passwordHash, currentUser.id),
     c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?')
       .bind(currentUser.id),
     authAuditStatement(c.env, currentUser.id, 'password_change', null, null),
   ]);
+  const credential = results[0]?.results?.[0] as { auth_version: number } | undefined;
+  if (!credential) return c.json({ error: 'Unauthorized' }, 401);
 
-  const session = await createSession(c.env, currentUser.id);
+  const session = await createSession(c.env, currentUser.id, credential.auth_version);
+  if (!session) {
+    return c.json(
+      { error: '凭据状态已更新，请使用新密码重新登录' },
+      409,
+      { 'Set-Cookie': clearSessionCookie() },
+    );
+  }
   return c.json(
     { success: true, user: toPublicUser(currentUser) },
     200,
@@ -476,8 +574,8 @@ function authAuditStatement(
     userId,
     action,
     String(userId),
-    before === null ? null : JSON.stringify(before),
-    after === null ? null : JSON.stringify(after),
+    before === null ? null : stringifyAuditJson(before),
+    after === null ? null : stringifyAuditJson(after),
   );
 }
 

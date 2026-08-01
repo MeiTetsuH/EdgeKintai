@@ -13,12 +13,19 @@
     one_way: '片道',
     round_trip: '往復',
   });
+  const TRANSPORT_MODES = Object.freeze({
+    rail: '鉄道',
+    bus: 'バス',
+    taxi: 'タクシー',
+    other: 'その他',
+  });
   const WEEKDAYS = Object.freeze(['日', '月', '火', '水', '木', '金', '土']);
 
   function generateMonthlyWorkbook(input, options) {
     const summary = normalizeSummary(input, options || {});
     const attendanceSheet = buildAttendanceSheet(summary);
     const summarySheet = buildSummarySheet(summary, attendanceSheet);
+    const transportSheet = buildTransportSheet(summary);
     const now = new Date();
 
     const files = {
@@ -26,11 +33,16 @@
       '_rels/.rels': rootRelationshipsXml(),
       'docProps/app.xml': appPropertiesXml(),
       'docProps/core.xml': corePropertiesXml(now),
-      'xl/workbook.xml': workbookXml(attendanceSheet.lastRow, summarySheet.lastRow),
+      'xl/workbook.xml': workbookXml(
+        attendanceSheet.lastRow,
+        summarySheet.lastRow,
+        transportSheet.lastRow,
+      ),
       'xl/_rels/workbook.xml.rels': workbookRelationshipsXml(),
       'xl/styles.xml': stylesXml(),
       'xl/worksheets/sheet1.xml': attendanceSheet.xml,
       'xl/worksheets/sheet2.xml': summarySheet.xml,
+      'xl/worksheets/sheet3.xml': transportSheet.xml,
     };
 
     return createZip(files, now);
@@ -44,8 +56,12 @@
     const source = unwrap(input);
     const year = integer(source.year, new Date().getFullYear(), 1955, 2100);
     const month = integer(source.month, new Date().getMonth() + 1, 1, 12);
-    const username = filenamePart(source.username || source.user?.username || 'user');
-    return `勤怠表_${username}_${year}${String(month).padStart(2, '0')}.xlsx`;
+    const employeeName = [
+      source.employee_name,
+      source.display_name,
+      source.user?.display_name,
+    ].map(filenamePart).find(Boolean) || '氏名未設定';
+    return `勤怠表_${employeeName}_${year}${String(month).padStart(2, '0')}.xlsx`;
   }
 
   function normalizeSummary(input, options) {
@@ -54,12 +70,9 @@
     const now = new Date();
     const year = integer(source.year, now.getFullYear(), 1955, 2100);
     const month = integer(source.month, now.getMonth() + 1, 1, 12);
-    const username = safeText(source.username || source.user?.username || options.username || '');
-    const employeeName = safeText(
-      source.employee_name || source.display_name || source.user?.display_name || options.employeeName || username,
+    const employeeName = workbookDisplayName(
+      source.employee_name || source.display_name || source.user?.display_name || options.employeeName,
     );
-    const records = normalizeRecords(source.records, year, month);
-    const derived = deriveMetrics(records, year, month);
     const thresholdMinutes = integer(
       source.overtime_threshold_minutes,
       integer(config.overtime_threshold_hours, 180, 0, 744) * 60,
@@ -73,11 +86,36 @@
       100000,
     );
     const defaultTripType = tripType(source.default_trip_type || config.default_trip_type) || 'round_trip';
+    const defaultTransportOrigin = safeText(
+      source.default_transport_origin
+        ?? source.user?.default_transport_origin
+        ?? config.default_transport_origin
+        ?? options.defaultTransportOrigin
+        ?? '',
+    );
+    const defaultTransportDestination = safeText(
+      source.default_transport_destination
+        ?? source.user?.default_transport_destination
+        ?? config.default_transport_destination
+        ?? options.defaultTransportDestination
+        ?? '',
+    );
+    const defaultTransportMode = transportMode(
+      source.default_transport_mode
+        ?? source.user?.default_transport_mode
+        ?? config.default_transport_mode
+        ?? options.defaultTransportMode,
+    );
+    const records = normalizeRecords(source.records, year, month, {
+      origin: defaultTransportOrigin,
+      destination: defaultTransportDestination,
+      mode: defaultTransportMode,
+    });
+    const derived = deriveMetrics(records, year, month);
 
     return {
       year,
       month,
-      username,
       employeeName,
       records,
       officeDays: numberOr(source.office_days, derived.officeDays),
@@ -95,11 +133,14 @@
       thresholdMinutes,
       defaultOneWayFare,
       defaultTripType,
+      defaultTransportOrigin,
+      defaultTransportDestination,
+      defaultTransportMode,
       holidayData: unwrap(source.holiday_data || {}),
     };
   }
 
-  function normalizeRecords(rawRecords, year, month) {
+  function normalizeRecords(rawRecords, year, month, transportDefaults) {
     const byDate = new Map();
     if (Array.isArray(rawRecords)) {
       for (const raw of rawRecords) {
@@ -117,6 +158,20 @@
           0,
           100000,
         );
+        const officeRecord = persisted && normalizedType === 'office';
+        const transportOrigin = officeRecord
+          ? safeText(raw.transport_origin === undefined ? transportDefaults.origin : raw.transport_origin)
+          : '';
+        const transportDestination = officeRecord
+          ? safeText(
+            raw.transport_destination === undefined
+              ? transportDefaults.destination
+              : raw.transport_destination,
+          )
+          : '';
+        const normalizedTransportMode = officeRecord
+          ? transportMode(raw.transport_mode === undefined ? transportDefaults.mode : raw.transport_mode)
+          : null;
 
         byDate.set(date, {
           id: integer(raw.id, 0, 0, Number.MAX_SAFE_INTEGER),
@@ -133,6 +188,9 @@
           oneWayFare,
           tripType: normalizedTrip,
           totalFare,
+          transportOrigin,
+          transportDestination,
+          transportMode: normalizedTransportMode,
           memo: safeText(raw.memo || ''),
         });
       }
@@ -158,6 +216,9 @@
         oneWayFare: 0,
         tripType: null,
         totalFare: 0,
+        transportOrigin: '',
+        transportDestination: '',
+        transportMode: null,
         memo: '',
       });
     }
@@ -201,7 +262,7 @@
     const rows = [];
     const merges = ['A1:K1', 'A2:K2', 'A3:K3'];
     const title = `${summary.year}年${summary.month}月　勤怠一覧`;
-    const identity = `氏名：${summary.employeeName || '（未設定）'}　／　ログイン名：${summary.username || '（未設定）'}`;
+    const identity = `氏名：${summary.employeeName || '（未設定）'}`;
     const period = `対象期間：${summary.year}/${String(summary.month).padStart(2, '0')}/01 ～ ${summary.year}/${String(summary.month).padStart(2, '0')}/${String(summary.records.length).padStart(2, '0')}　　会社月間基準：${formatDuration(summary.thresholdMinutes)}（法定時間外労働の判定ではありません）`;
 
     rows.push(rowXml(1, [stringCell('A1', title, 1)], 28));
@@ -324,7 +385,7 @@
     const rows = [];
     const merges = ['A1:D1', 'A2:D2', 'A4:B4', 'C4:D4', 'A10:D10', 'A12:D12'];
     const title = `${summary.year}年${summary.month}月　月次サマリー`;
-    const identity = `氏名：${summary.employeeName || '（未設定）'}　／　ログイン名：${summary.username || '（未設定）'}`;
+    const identity = `氏名：${summary.employeeName || '（未設定）'}`;
     const breakdown = transportBreakdown(summary.records);
 
     rows.push(rowXml(1, [stringCell('A1', title, 1)], 28));
@@ -425,6 +486,88 @@
     return { xml, lastRow };
   }
 
+  function buildTransportSheet(summary) {
+    const rows = [];
+    const merges = ['A1:I1', 'A2:I2', 'A3:I3'];
+    const title = `${summary.year}年${summary.month}月　交通費明細`;
+    const identity = `氏名：${summary.employeeName || '（未設定）'}`;
+    const period = `対象期間：${summary.year}/${String(summary.month).padStart(2, '0')}/01 ～ ${summary.year}/${String(summary.month).padStart(2, '0')}/${String(summary.records.length).padStart(2, '0')}`;
+    const officeRecords = summary.records.filter((record) => (
+      record.persisted && record.workType === 'office'
+    ));
+
+    rows.push(rowXml(1, [stringCell('A1', title, 1)], 28));
+    rows.push(rowXml(2, [stringCell('A2', identity, 2)], 20));
+    rows.push(rowXml(3, [stringCell('A3', period, 2)], 20));
+    const headers = ['利用日', '曜日', '出発地', '到着地', '交通手段', '利用区分', '片道運賃', '支給額', '備考'];
+    rows.push(rowXml(4, headers.map((value, index) => (
+      stringCell(`${columnName(index + 1)}4`, value, 3)
+    )), 24));
+
+    let rowNumber = 5;
+    for (const record of officeRecords) {
+      const sundayOrHoliday = record.isHoliday || record.dayOfWeek === 0;
+      const saturday = !sundayOrHoliday && record.dayOfWeek === 6;
+      const dateStyle = sundayOrHoliday ? 19 : (saturday ? 21 : 4);
+      const textStyle = sundayOrHoliday ? 10 : (saturday ? 20 : 5);
+      const tripLabel = tripTypeLabel(record.tripType);
+      const memo = [record.holidayName, record.memo]
+        .filter((value, index, values) => value && values.indexOf(value) === index)
+        .join(' / ');
+      rows.push(rowXml(rowNumber, [
+        numberCell(`A${rowNumber}`, excelDateSerial(record.date), dateStyle),
+        stringCell(`B${rowNumber}`, WEEKDAYS[record.dayOfWeek] || '', textStyle),
+        stringCell(`C${rowNumber}`, record.transportOrigin, 9),
+        stringCell(`D${rowNumber}`, record.transportDestination, 9),
+        stringCell(
+          `E${rowNumber}`,
+          record.transportMode ? transportModeLabel(record.transportMode) : '',
+          5,
+        ),
+        stringCell(`F${rowNumber}`, tripLabel, 5),
+        numberCell(`G${rowNumber}`, record.oneWayFare, 8),
+        formulaCell(
+          `H${rowNumber}`,
+          `G${rowNumber}*IF(F${rowNumber}="往復",2,1)`,
+          record.totalFare,
+          8,
+        ),
+        stringCell(`I${rowNumber}`, memo, 9),
+      ], 22));
+      rowNumber += 1;
+    }
+
+    const totalRow = rowNumber;
+    merges.push(`A${totalRow}:G${totalRow}`);
+    rows.push(rowXml(totalRow, [
+      stringCell(`A${totalRow}`, '交通費合計', 11),
+      formulaCell(
+        `H${totalRow}`,
+        officeRecords.length ? `SUM(H5:H${totalRow - 1})` : '0',
+        summary.totalTransportFee,
+        13,
+      ),
+      blankCell(`I${totalRow}`, 11),
+    ], 23));
+
+    const lastRow = totalRow;
+    const lastDataRow = officeRecords.length ? totalRow - 1 : 4;
+    const xml = worksheetXml({
+      dimension: `A1:I${lastRow}`,
+      columns: [12, 6, 18, 18, 12, 10, 12, 13, 24],
+      rows,
+      merges,
+      freezeRows: 4,
+      autoFilter: `A4:I${lastDataRow}`,
+      printArea: `A1:I${lastRow}`,
+      landscape: true,
+      repeatRows: '1:4',
+      header: `&L${excelHeaderText(summary.employeeName)}&C${summary.year}年${summary.month}月 交通費明細&R&P / &N`,
+      footer: '&L申請用&C社内確認用&R出力日 &D',
+    });
+    return { xml, lastRow };
+  }
+
   function worksheetXml(options) {
     const columns = options.columns.map((width, index) => (
       `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`
@@ -454,7 +597,7 @@
     );
   }
 
-  function workbookXml(attendanceLastRow, summaryLastRow) {
+  function workbookXml(attendanceLastRow, summaryLastRow, transportLastRow) {
     return xmlDocument(
       `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
         `<fileVersion appName="Kintai"/>` +
@@ -463,12 +606,15 @@
         `<sheets>` +
           `<sheet name="勤怠一覧" sheetId="1" r:id="rId1"/>` +
           `<sheet name="月次サマリー" sheetId="2" r:id="rId2"/>` +
+          `<sheet name="交通費明細" sheetId="3" r:id="rId3"/>` +
         `</sheets>` +
         `<definedNames>` +
           `<definedName name="_xlnm.Print_Titles" localSheetId="0">'勤怠一覧'!$1:$5</definedName>` +
           `<definedName name="_xlnm.Print_Area" localSheetId="0">'勤怠一覧'!$A$1:$K$${attendanceLastRow}</definedName>` +
           `<definedName name="_xlnm.Print_Titles" localSheetId="1">'月次サマリー'!$1:$4</definedName>` +
           `<definedName name="_xlnm.Print_Area" localSheetId="1">'月次サマリー'!$A$1:$D$${summaryLastRow}</definedName>` +
+          `<definedName name="_xlnm.Print_Titles" localSheetId="2">'交通費明細'!$1:$4</definedName>` +
+          `<definedName name="_xlnm.Print_Area" localSheetId="2">'交通費明細'!$A$1:$I$${transportLastRow}</definedName>` +
         `</definedNames>` +
         `<calcPr calcId="191029" fullCalcOnLoad="1"/>` +
       `</workbook>`,
@@ -480,7 +626,8 @@
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
         `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
         `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>` +
-        `<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+        `<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>` +
+        `<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
       `</Relationships>`,
     );
   }
@@ -503,6 +650,7 @@
         `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
         `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
         `<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+        `<Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
         `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
         `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>` +
         `<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>` +
@@ -526,8 +674,8 @@
     return xmlDocument(
       `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">` +
         `<Application>勤怠表</Application><DocSecurity>0</DocSecurity><ScaleCrop>false</ScaleCrop>` +
-        `<HeadingPairs><vt:vector size="2" baseType="variant"><vt:variant><vt:lpstr>ワークシート</vt:lpstr></vt:variant><vt:variant><vt:i4>2</vt:i4></vt:variant></vt:vector></HeadingPairs>` +
-        `<TitlesOfParts><vt:vector size="2" baseType="lpstr"><vt:lpstr>勤怠一覧</vt:lpstr><vt:lpstr>月次サマリー</vt:lpstr></vt:vector></TitlesOfParts>` +
+        `<HeadingPairs><vt:vector size="2" baseType="variant"><vt:variant><vt:lpstr>ワークシート</vt:lpstr></vt:variant><vt:variant><vt:i4>3</vt:i4></vt:variant></vt:vector></HeadingPairs>` +
+        `<TitlesOfParts><vt:vector size="3" baseType="lpstr"><vt:lpstr>勤怠一覧</vt:lpstr><vt:lpstr>月次サマリー</vt:lpstr><vt:lpstr>交通費明細</vt:lpstr></vt:vector></TitlesOfParts>` +
         `<Company></Company><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc><HyperlinksChanged>false</HyperlinksChanged><AppVersion>1.0</AppVersion>` +
       `</Properties>`,
     );
@@ -673,6 +821,14 @@
     return Object.prototype.hasOwnProperty.call(TRIP_TYPES, value) ? value : null;
   }
 
+  function transportModeLabel(value) {
+    return TRANSPORT_MODES[value] || '不明';
+  }
+
+  function transportMode(value) {
+    return Object.prototype.hasOwnProperty.call(TRANSPORT_MODES, value) ? value : null;
+  }
+
   function isWorking(value) {
     return value === 'office' || value === 'remote';
   }
@@ -724,13 +880,37 @@
   }
 
   function filenamePart(value) {
-    const safe = safeText(value)
+    const safe = String(value === null || value === undefined ? '' : value)
+      .normalize('NFC')
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+      .replace(/\p{Cf}/gu, ' ')
       .replace(/[\\/:*?"<>|]/g, '_')
-      .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+      .replace(/\s+/gu, ' ')
+      .replace(/_+/g, '_')
+      .replace(/\s*_\s*/g, '_')
+      .replace(/^[._\s]+|[._\s]+$/gu, '');
+    return truncateUtf8(safe, 120).replace(/^[._\s]+|[._\s]+$/gu, '');
+  }
+
+  function workbookDisplayName(value) {
+    return safeText(value)
+      .normalize('NFC')
+      .replace(/\p{Cf}/gu, '')
       .trim()
-      .replace(/^[._\s]+/, '')
-      .replace(/[.\s]+$/, '');
-    return safe.slice(0, 80) || 'user';
+      .slice(0, 80);
+  }
+
+  function truncateUtf8(value, maxBytes) {
+    const encoder = new TextEncoder();
+    let bytes = 0;
+    let result = '';
+    for (const character of value) {
+      const characterBytes = encoder.encode(character).length;
+      if (bytes + characterBytes > maxBytes) break;
+      result += character;
+      bytes += characterBytes;
+    }
+    return result;
   }
 
   function validDate(value) {

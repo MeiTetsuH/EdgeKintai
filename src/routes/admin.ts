@@ -2,18 +2,20 @@ import { Hono } from 'hono';
 import { adminGuard } from '../middleware/adminGuard';
 import { authMiddleware, type AuthEnv } from '../middleware/auth';
 import type { Attendance, User } from '../types';
+import { stringifyAuditJson } from '../utils/audit';
 import { getRequiredHolidayData } from '../utils/holidays';
 import { hashPassword } from '../utils/password';
 import { buildMonthlySummaryFromRecords } from '../utils/summary';
 import { monthStart, nextMonthStart } from '../utils/time';
 import {
+  displayNameValue,
   nullableBoundedInteger,
   optionalString,
   passwordValue,
   positiveIdValue,
   readJsonObject,
   RequestValidationError,
-  requiredString,
+  transportModeValue,
   tripTypeValue,
   usernameValue,
   yearMonthValues,
@@ -21,6 +23,8 @@ import {
 } from '../utils/validation';
 
 const admin = new Hono<AuthEnv>();
+type ManagedUser = Omit<User, 'auth_version'>;
+
 admin.use('*', authMiddleware);
 admin.use('*', adminGuard);
 
@@ -28,9 +32,10 @@ admin.get('/users', async (c) => {
   const result = await c.env.DB.prepare(
     `SELECT id, username, display_name, is_admin, created_at,
             default_one_way_fare, default_trip_type,
+            default_transport_mode, default_transport_origin, default_transport_destination,
             default_clock_in, default_clock_out
      FROM users ORDER BY display_name COLLATE NOCASE, id`,
-  ).all<User>();
+  ).all<ManagedUser>();
   return c.json({ users: result.results });
 });
 
@@ -40,7 +45,7 @@ admin.post('/users', async (c) => {
   const username = usernameValue(body.username);
   const displayName = body.display_name === undefined
     ? username
-    : requiredString(body.display_name, '姓名', 1, 80);
+    : displayNameValue(body.display_name);
   const password = passwordValue(body.password);
   const isAdmin = adminFlagValue(body.is_admin, 0);
   const defaultFare = nullableBoundedInteger(
@@ -50,22 +55,39 @@ admin.post('/users', async (c) => {
     100_000,
   ) ?? null;
   const defaultTripType = tripTypeValue(body.default_trip_type, 'round_trip');
+  const defaultTransportMode = transportModeValue(body.default_transport_mode, 'rail');
+  const defaultTransportOrigin = optionalString(body.default_transport_origin, '出发地', 120) ?? '';
+  const defaultTransportDestination = optionalString(body.default_transport_destination, '到达地', 120) ?? '';
   const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
   const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
   const passwordHash = await hashPassword(password);
 
-  let user: User | undefined;
+  let user: ManagedUser | undefined;
   try {
     const insert = c.env.DB.prepare(
       `INSERT INTO users (
          username, password_hash, display_name, is_admin,
          default_one_way_fare, default_trip_type,
+         default_transport_mode, default_transport_origin, default_transport_destination,
          default_clock_in, default_clock_out
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id, username, display_name, is_admin, created_at,
                  default_one_way_fare, default_trip_type,
+                 default_transport_mode, default_transport_origin, default_transport_destination,
                  default_clock_in, default_clock_out`,
-    ).bind(username, passwordHash, displayName, isAdmin, defaultFare, defaultTripType, defaultClockIn, defaultClockOut);
+    ).bind(
+      username,
+      passwordHash,
+      displayName,
+      isAdmin,
+      defaultFare,
+      defaultTripType,
+      defaultTransportMode,
+      defaultTransportOrigin,
+      defaultTransportDestination,
+      defaultClockIn,
+      defaultClockOut,
+    );
     const audit = c.env.DB.prepare(
       `INSERT INTO audit_logs (
          actor_user_id, target_user_id, action, entity_type, entity_key, before_json, after_json
@@ -75,19 +97,22 @@ admin.post('/users', async (c) => {
        WHERE username = ?`,
     ).bind(
       actor.id,
-      JSON.stringify({
+      stringifyAuditJson({
         username,
         display_name: displayName,
         is_admin: isAdmin,
         default_one_way_fare: defaultFare,
         default_trip_type: defaultTripType,
+        default_transport_mode: defaultTransportMode,
+        default_transport_origin: defaultTransportOrigin,
+        default_transport_destination: defaultTransportDestination,
         default_clock_in: defaultClockIn,
         default_clock_out: defaultClockOut,
       }),
       username,
     );
     const results = await c.env.DB.batch([insert, audit]);
-    user = results[0]?.results?.[0] as User | undefined;
+    user = results[0]?.results?.[0] as ManagedUser | undefined;
   } catch (error) {
     if (String(error).includes('UNIQUE')) {
       return c.json({ error: '该登录名已被使用' }, 409);
@@ -108,12 +133,22 @@ admin.patch('/users/:id', async (c) => {
 
   const displayName = body.display_name === undefined
     ? existing.display_name
-    : requiredString(body.display_name, '姓名', 1, 80);
+    : displayNameValue(body.display_name);
   const isAdmin = adminFlagValue(body.is_admin, existing.is_admin);
   const defaultFare = body.default_one_way_fare === undefined
     ? existing.default_one_way_fare
     : nullableBoundedInteger(body.default_one_way_fare, '默认片道交通费', 0, 100_000) ?? null;
   const defaultTripType = tripTypeValue(body.default_trip_type, existing.default_trip_type);
+  const defaultTransportMode = transportModeValue(
+    body.default_transport_mode,
+    existing.default_transport_mode,
+  );
+  const defaultTransportOrigin = body.default_transport_origin === undefined
+    ? existing.default_transport_origin
+    : optionalString(body.default_transport_origin, '出发地', 120) ?? '';
+  const defaultTransportDestination = body.default_transport_destination === undefined
+    ? existing.default_transport_destination
+    : optionalString(body.default_transport_destination, '到达地', 120) ?? '';
   const defaultClockIn = body.default_clock_in === undefined
     ? existing.default_clock_in
     : nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
@@ -130,17 +165,43 @@ admin.patch('/users/:id', async (c) => {
 
   const update = c.env.DB.prepare(
     `UPDATE users
-     SET display_name = ?, is_admin = ?, default_one_way_fare = ?, default_trip_type = ?, default_clock_in = ?, default_clock_out = ?
+     SET display_name = ?,
+         is_admin = ?,
+         default_one_way_fare = ?,
+         default_trip_type = ?,
+         default_transport_mode = ?,
+         default_transport_origin = ?,
+         default_transport_destination = ?,
+         default_clock_in = ?,
+         default_clock_out = ?,
+         auth_version = CASE WHEN is_admin <> ? THEN auth_version + 1 ELSE auth_version END
      WHERE id = ?
      RETURNING id, username, display_name, is_admin, created_at,
-               default_one_way_fare, default_trip_type, default_clock_in, default_clock_out`,
-  ).bind(displayName, isAdmin, defaultFare, defaultTripType, defaultClockIn, defaultClockOut, targetId);
+               default_one_way_fare, default_trip_type,
+               default_transport_mode, default_transport_origin, default_transport_destination,
+               default_clock_in, default_clock_out`,
+  ).bind(
+    displayName,
+    isAdmin,
+    defaultFare,
+    defaultTripType,
+    defaultTransportMode,
+    defaultTransportOrigin,
+    defaultTransportDestination,
+    defaultClockIn,
+    defaultClockOut,
+    isAdmin,
+    targetId,
+  );
   const after = {
     ...existing,
     display_name: displayName,
     is_admin: isAdmin,
     default_one_way_fare: defaultFare,
     default_trip_type: defaultTripType,
+    default_transport_mode: defaultTransportMode,
+    default_transport_origin: defaultTransportOrigin,
+    default_transport_destination: defaultTransportDestination,
     default_clock_in: defaultClockIn,
     default_clock_out: defaultClockOut,
   };
@@ -159,7 +220,7 @@ admin.patch('/users/:id', async (c) => {
     }
     throw error;
   }
-  const user = results[0]?.results?.[0] as User | undefined;
+  const user = results[0]?.results?.[0] as ManagedUser | undefined;
   return c.json({ success: true, user });
 });
 
@@ -173,7 +234,9 @@ admin.post('/users/:id/password', async (c) => {
   const passwordHash = await hashPassword(newPassword);
 
   await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(passwordHash, targetId),
+    c.env.DB.prepare(
+      'UPDATE users SET password_hash = ?, auth_version = auth_version + 1 WHERE id = ?',
+    ).bind(passwordHash, targetId),
     c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId),
     adminAuditStatement(c.env, actor.id, targetId, 'password_reset', targetId, null, null),
   ]);
@@ -209,9 +272,10 @@ admin.get('/overview/:year/:month', async (c) => {
     c.env.DB.prepare(
       `SELECT id, username, display_name, is_admin, created_at,
               default_one_way_fare, default_trip_type,
+              default_transport_mode, default_transport_origin, default_transport_destination,
               default_clock_in, default_clock_out
        FROM users ORDER BY display_name COLLATE NOCASE, id`,
-    ).all<User>(),
+    ).all<ManagedUser>(),
     c.env.DB.prepare(
       `SELECT * FROM attendance
        WHERE work_date >= ? AND work_date < ?
@@ -251,13 +315,14 @@ function adminFlagValue(value: unknown, fallback: number): 0 | 1 {
   throw new RequestValidationError('管理员权限值不正确');
 }
 
-async function getUser(env: CloudflareBindings, id: number): Promise<User | null> {
+async function getUser(env: CloudflareBindings, id: number): Promise<ManagedUser | null> {
   return env.DB.prepare(
     `SELECT id, username, display_name, is_admin, created_at,
             default_one_way_fare, default_trip_type,
+            default_transport_mode, default_transport_origin, default_transport_destination,
             default_clock_in, default_clock_out
      FROM users WHERE id = ?`,
-  ).bind(id).first<User>();
+  ).bind(id).first<ManagedUser>();
 }
 
 function adminAuditStatement(
@@ -278,8 +343,8 @@ function adminAuditStatement(
     targetId,
     action,
     String(entityKey),
-    before === null ? null : JSON.stringify(before),
-    after === null ? null : JSON.stringify(after),
+    before === null ? null : stringifyAuditJson(before),
+    after === null ? null : stringifyAuditJson(after),
   );
 }
 

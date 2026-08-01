@@ -149,6 +149,8 @@
                 <div><dt>休憩</dt><dd id="today-record-break">0分</dd></div>
                 <div><dt>交通費</dt><dd id="today-record-fare">¥0</dd></div>
                 <div><dt>実働</dt><dd id="today-record-work">0:00</dd></div>
+                <div><dt>交通手段</dt><dd id="today-record-transport-mode">—</dd></div>
+                <div><dt>経路</dt><dd id="today-record-route" class="record-route-value">—</dd></div>
               </dl>
               <div class="button-row">
                 <button id="clock-out-button" class="button button-danger" type="button">退勤する</button>
@@ -192,16 +194,35 @@
                 </div>
                 <div class="field-grid">
                   <div class="field" data-office-field>
+                    <label for="clock-transport-mode">交通手段</label>
+                    <select id="clock-transport-mode" name="transport_mode">
+                      <option value="rail">鉄道</option>
+                      <option value="bus">バス</option>
+                      <option value="taxi">タクシー</option>
+                      <option value="other">その他</option>
+                    </select>
+                  </div>
+                  <div class="field" data-office-field>
                     <label for="clock-trip-type">交通区分</label>
                     <select id="clock-trip-type" name="transport_trip_type">
                       <option value="round_trip">往復</option>
                       <option value="one_way">片道</option>
                     </select>
                   </div>
-                  <div class="fare-preview" data-office-field>
-                    <span>交通費合計</span>
-                    <strong id="clock-fare-preview">¥0</strong>
+                </div>
+                <div class="field-grid">
+                  <div class="field" data-office-field>
+                    <label for="clock-transport-origin">出発地（駅・停留所など）</label>
+                    <input id="clock-transport-origin" name="transport_origin" type="text" maxlength="120">
                   </div>
+                  <div class="field" data-office-field>
+                    <label for="clock-transport-destination">到着地（駅・停留所など）</label>
+                    <input id="clock-transport-destination" name="transport_destination" type="text" maxlength="120">
+                  </div>
+                </div>
+                <div class="fare-preview" data-office-field>
+                  <span>交通費合計</span>
+                  <strong id="clock-fare-preview">¥0</strong>
                 </div>
                 <button id="clock-in-button" class="button button-primary button-wide" type="submit">出勤する</button>
               </form>
@@ -260,8 +281,10 @@
                     <th scope="col">退勤</th>
                     <th scope="col">休憩</th>
                     <th scope="col">実働</th>
+                    <th scope="col">交通手段</th>
+                    <th scope="col">経路</th>
                     <th scope="col">片道</th>
-                    <th scope="col">交通</th>
+                    <th scope="col">交通区分</th>
                     <th scope="col">合計</th>
                   </tr>
                 </thead>
@@ -281,31 +304,52 @@
           </div>
 
           <div class="settings-grid">
-            <section class="panel">
-              <div class="panel-heading"><h2>プロフィールと交通費</h2></div>
-              <form id="profile-form" class="stack" novalidate>
-                <div class="field">
-                  <label for="profile-username">ログイン名</label>
-                  <input id="profile-username" type="text" readonly aria-describedby="username-help">
-                  <small id="username-help">ログイン名は管理上の識別子のため変更できません。</small>
-                </div>
-                <div class="field">
-                  <label for="profile-display-name">氏名</label>
-                  <input id="profile-display-name" type="text" autocomplete="name" maxlength="80" required>
-                </div>
-                <div class="field-grid">
+            <section class="panel settings-profile-panel" aria-labelledby="profile-panel-title">
+              <div class="panel-heading"><h2 id="profile-panel-title">プロフィール</h2></div>
+              <div class="settings-profile-layout">
+                <form id="profile-form" class="settings-subsection stack compact" novalidate aria-labelledby="profile-details-title">
+                  <h3 id="profile-details-title">基本情報</h3>
                   <div class="field">
-                    <label for="profile-one-way-fare">既定の片道運賃（円）</label>
-                    <input id="profile-one-way-fare" type="number" inputmode="numeric" min="0" max="100000" step="1">
+                    <label for="profile-username">ログイン名</label>
+                    <input id="profile-username" type="text" readonly aria-describedby="username-help">
+                    <small id="username-help">ログインに使用する識別子です。変更できません。</small>
                   </div>
                   <div class="field">
-                    <label for="profile-trip-type">既定の交通区分</label>
-                    <select id="profile-trip-type">
-                      <option value="round_trip">往復</option>
-                      <option value="one_way">片道</option>
-                    </select>
+                    <label for="profile-display-name">氏名（Excel表示名）</label>
+                    <input id="profile-display-name" type="text" autocomplete="name" maxlength="80" required aria-describedby="display-name-help">
+                    <small id="display-name-help">画面上の氏名と、Excel内およびファイル名に使用します。</small>
                   </div>
-                </div>
+                  <div class="export-name-preview" aria-live="polite">
+                    <span>Excelファイル名</span>
+                    <output id="excel-filename-preview" for="profile-display-name">勤怠表_氏名_YYYYMM.xlsx</output>
+                  </div>
+                  <button class="button button-primary" type="submit">プロフィールを保存</button>
+                </form>
+
+                <form id="password-form" class="settings-subsection stack compact" novalidate aria-labelledby="password-form-title">
+                  <h3 id="password-form-title">パスワード変更</h3>
+                  <div class="field">
+                    <label for="current-password">現在のパスワード</label>
+                    <input id="current-password" type="password" autocomplete="current-password" maxlength="128" required>
+                  </div>
+                  <div class="field-grid">
+                    <div class="field">
+                      <label for="new-password">新しいパスワード</label>
+                      <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                    </div>
+                    <div class="field">
+                      <label for="new-password-confirm">新しいパスワード（確認）</label>
+                      <input id="new-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                    </div>
+                  </div>
+                  <button class="button" type="submit">パスワードを変更</button>
+                </form>
+              </div>
+            </section>
+
+            <section class="panel" aria-labelledby="work-defaults-title">
+              <div class="panel-heading"><h2 id="work-defaults-title">勤務の既定値</h2></div>
+              <form id="work-defaults-form" class="stack compact" novalidate>
                 <div class="field-grid">
                   <div class="field">
                     <label for="profile-clock-in">既定の出勤時刻</label>
@@ -316,42 +360,46 @@
                     <input id="profile-clock-out" type="time" step="60">
                   </div>
                 </div>
-                <button class="button button-primary" type="submit">設定を保存</button>
+                <button class="button button-primary" type="submit">勤務設定を保存</button>
               </form>
             </section>
 
-            <section class="panel">
-              <div class="panel-heading"><h2>過去の勤務を補録・修正</h2></div>
-              <p class="muted section-copy">日付を選ぶか、最近の記録からすぐに編集できます。</p>
-              <form id="quick-edit-form" class="quick-edit" novalidate>
-                <div class="field">
-                  <label for="quick-edit-date">編集する日付</label>
-                  <input id="quick-edit-date" type="date" min="1955-01-01" max="2100-12-31" required>
-                </div>
-                <button class="button" type="submit">この日を編集</button>
-              </form>
-              <h3 class="subheading">最近の記録</h3>
-              <div id="recent-records" class="recent-records"></div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-heading"><h2>パスワード変更</h2></div>
-              <form id="password-form" class="stack" novalidate>
-                <div class="field">
-                  <label for="current-password">現在のパスワード</label>
-                  <input id="current-password" type="password" autocomplete="current-password" maxlength="128" required>
+            <section class="panel" aria-labelledby="commute-settings-title">
+              <div class="panel-heading"><h2 id="commute-settings-title">通勤設定</h2></div>
+              <form id="commute-form" class="stack compact" novalidate>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="profile-transport-origin">出発地（駅・停留所など）</label>
+                    <input id="profile-transport-origin" type="text" maxlength="120">
+                  </div>
+                  <div class="field">
+                    <label for="profile-transport-destination">到着地（駅・停留所など）</label>
+                    <input id="profile-transport-destination" type="text" maxlength="120">
+                  </div>
                 </div>
                 <div class="field-grid">
                   <div class="field">
-                    <label for="new-password">新しいパスワード</label>
-                    <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                    <label for="profile-transport-mode">既定の交通手段</label>
+                    <select id="profile-transport-mode">
+                      <option value="rail">鉄道</option>
+                      <option value="bus">バス</option>
+                      <option value="taxi">タクシー</option>
+                      <option value="other">その他</option>
+                    </select>
                   </div>
                   <div class="field">
-                    <label for="new-password-confirm">新しいパスワード（確認）</label>
-                    <input id="new-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                    <label for="profile-one-way-fare">既定の片道運賃（円）</label>
+                    <input id="profile-one-way-fare" type="number" inputmode="numeric" min="0" max="100000" step="1">
                   </div>
                 </div>
-                <button class="button" type="submit">パスワードを変更</button>
+                <div class="field">
+                  <label for="profile-trip-type">既定の交通区分</label>
+                  <select id="profile-trip-type">
+                    <option value="round_trip">往復</option>
+                    <option value="one_way">片道</option>
+                  </select>
+                </div>
+                <button class="button button-primary" type="submit">通勤設定を保存</button>
               </form>
             </section>
           </div>
@@ -449,11 +497,32 @@
         <div class="field-grid">
           <div class="field" data-record-office-field><label for="record-one-way-fare">片道運賃（円）</label><input id="record-one-way-fare" type="number" min="0" max="100000" step="1"></div>
           <div class="field" data-record-office-field>
+            <label for="record-transport-mode">交通手段</label>
+            <select id="record-transport-mode">
+              <option value="rail">鉄道</option>
+              <option value="bus">バス</option>
+              <option value="taxi">タクシー</option>
+              <option value="other">その他</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-grid">
+          <div class="field" data-record-office-field>
+            <label for="record-transport-origin">出発地（駅・停留所など）</label>
+            <input id="record-transport-origin" type="text" maxlength="120">
+          </div>
+          <div class="field" data-record-office-field>
+            <label for="record-transport-destination">到着地（駅・停留所など）</label>
+            <input id="record-transport-destination" type="text" maxlength="120">
+          </div>
+        </div>
+        <div class="field-grid">
+          <div class="field" data-record-office-field>
             <label for="record-trip-type">交通区分</label>
             <select id="record-trip-type"><option value="round_trip">往復</option><option value="one_way">片道</option></select>
           </div>
+          <div class="fare-preview" data-record-office-field><span>交通費合計</span><strong id="record-fare-preview">¥0</strong></div>
         </div>
-        <div class="fare-preview" data-record-office-field><span>交通費合計</span><strong id="record-fare-preview">¥0</strong></div>
         <div class="field">
           <label for="record-memo">備考</label>
           <textarea id="record-memo" rows="3" maxlength="500"></textarea>

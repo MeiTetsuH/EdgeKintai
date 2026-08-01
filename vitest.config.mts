@@ -21,6 +21,8 @@ export default defineConfig({
           DEFAULT_BREAK_MINUTES: '60',
           DEFAULT_ONE_WAY_FARE: '210',
           DEFAULT_TRIP_TYPE: 'round_trip',
+          DEFAULT_CLOCK_IN: '10:00',
+          DEFAULT_CLOCK_OUT: '19:00',
           OVERTIME_THRESHOLD_HOURS: '180',
           SESSION_TTL_SECONDS: '604800',
           SETUP_TOKEN: 'test-setup-token-0123456789abcdef0123456789abcdef',

@@ -1,4 +1,4 @@
-import type { PublicAppConfig, TransportTripType, User } from '../types';
+import type { PublicAppConfig, TransportMode, TransportTripType, User } from '../types';
 
 function integerSetting(value: string | undefined, fallback: number, min: number, max: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -32,14 +32,30 @@ export function getSessionTtlSeconds(env: CloudflareBindings): number {
   return integerSetting(env.SESSION_TTL_SECONDS, 604_800, 300, 2_592_000);
 }
 
-export function getUserFareDefaults(
+export function getUserCommuteDefaults(
   env: CloudflareBindings,
-  user: Pick<User, 'default_one_way_fare' | 'default_trip_type'>,
-): { one_way_fare: number; trip_type: TransportTripType } {
+  user: Pick<
+    User,
+    | 'default_one_way_fare'
+    | 'default_trip_type'
+    | 'default_transport_mode'
+    | 'default_transport_origin'
+    | 'default_transport_destination'
+  >,
+): {
+  one_way_fare: number;
+  trip_type: TransportTripType;
+  transport_mode: TransportMode;
+  transport_origin: string;
+  transport_destination: string;
+} {
   const config = getPublicConfig(env);
   return {
     one_way_fare: user.default_one_way_fare ?? config.default_one_way_fare,
     trip_type: user.default_trip_type || config.default_trip_type,
+    transport_mode: user.default_transport_mode || 'rail',
+    transport_origin: user.default_transport_origin || '',
+    transport_destination: user.default_transport_destination || '',
   };
 }
 

@@ -1,5 +1,6 @@
 export type WorkType = 'office' | 'remote' | 'paid_leave' | 'holiday' | 'absent';
 export type TransportTripType = 'one_way' | 'round_trip';
+export type TransportMode = 'rail' | 'bus' | 'taxi' | 'other';
 
 export interface User {
   id: number;
@@ -9,8 +10,12 @@ export interface User {
   created_at: string;
   default_one_way_fare: number | null;
   default_trip_type: TransportTripType;
+  default_transport_mode: TransportMode;
+  default_transport_origin: string;
+  default_transport_destination: string;
   default_clock_in: string | null;
   default_clock_out: string | null;
+  auth_version: number;
 }
 
 export interface Attendance {
@@ -24,6 +29,9 @@ export interface Attendance {
   transport_fee: number;
   transport_one_way_fee: number | null;
   transport_trip_type: TransportTripType;
+  transport_mode: TransportMode;
+  transport_origin: string;
+  transport_destination: string;
   memo: string;
   created_at: string;
   updated_at: string;
@@ -66,6 +74,11 @@ export interface MonthlySummary {
   total_transport_fee: number;
   overtime_minutes: number;
   overtime_threshold_minutes: number;
+  default_one_way_fare: number;
+  default_trip_type: TransportTripType;
+  default_transport_mode: TransportMode;
+  default_transport_origin: string;
+  default_transport_destination: string;
   records: AttendanceWithDay[];
   holiday_data: Omit<HolidayData, 'holidays'>;
 }

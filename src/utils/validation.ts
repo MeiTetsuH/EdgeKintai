@@ -1,4 +1,4 @@
-import type { TransportTripType, WorkType } from '../types';
+import type { TransportMode, TransportTripType, WorkType } from '../types';
 import { isValidDate, isValidTime } from './time';
 
 export class RequestValidationError extends Error {
@@ -96,6 +96,15 @@ export function optionalString(value: unknown, label: string, maxLength: number)
   return normalized;
 }
 
+export function displayNameValue(value: unknown): string {
+  const displayName = requiredString(value, '姓名', 1, 80);
+  const visible = displayName.replace(/[\p{C}\p{Z}]/gu, '');
+  if (!visible || !/[\p{L}\p{N}\p{M}\p{S}]/u.test(visible)) {
+    throw new RequestValidationError('姓名必须包含可显示的文字');
+  }
+  return displayName;
+}
+
 export function usernameValue(value: unknown): string {
   const username = requiredString(value, '登录名', 3, 64);
   if (!/^[A-Za-z0-9._-]+$/.test(username)) {
@@ -123,6 +132,12 @@ export function tripTypeValue(value: unknown, fallback?: TransportTripType): Tra
   if (value === undefined && fallback) return fallback;
   if (value === 'one_way' || value === 'round_trip') return value;
   throw new RequestValidationError('交通费区分不正确');
+}
+
+export function transportModeValue(value: unknown, fallback?: TransportMode): TransportMode {
+  if (value === undefined && fallback) return fallback;
+  if (value === 'rail' || value === 'bus' || value === 'taxi' || value === 'other') return value;
+  throw new RequestValidationError('交通手段不正确');
 }
 
 export function boundedInteger(

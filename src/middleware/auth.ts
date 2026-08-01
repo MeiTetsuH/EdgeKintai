@@ -69,11 +69,17 @@ export async function getSessionUser(
        u.created_at,
        u.default_one_way_fare,
        u.default_trip_type,
+       u.default_transport_mode,
+       u.default_transport_origin,
+       u.default_transport_destination,
        u.default_clock_in,
-       u.default_clock_out
+       u.default_clock_out,
+       u.auth_version
      FROM sessions AS s
      INNER JOIN users AS u ON u.id = s.user_id
-     WHERE s.token_id = ? AND s.expires_at > datetime('now')
+     WHERE s.token_id = ?
+       AND s.auth_version = u.auth_version
+       AND s.expires_at > datetime('now')
      LIMIT 1`,
   )
     .bind(tokenHash)
@@ -137,18 +143,23 @@ export async function consumePasswordReauthentication(
 export async function createSession(
   env: CloudflareBindings,
   userId: number,
-): Promise<SessionHandle> {
+  expectedAuthVersion: number,
+): Promise<SessionHandle | null> {
   const ttlSeconds = getSessionTtlSeconds(env);
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
   const token = newOpaqueToken();
   const tokenHash = await hashSessionToken(token);
 
-  await env.DB.prepare(
-    `INSERT INTO sessions (token_id, user_id, expires_at)
-     VALUES (?, ?, ?)`,
+  const inserted = await env.DB.prepare(
+    `INSERT INTO sessions (token_id, user_id, expires_at, auth_version)
+     SELECT ?, id, ?, auth_version
+     FROM users
+     WHERE id = ? AND auth_version = ?`,
   )
-    .bind(tokenHash, userId, toSqliteDateTime(expiresAt))
+    .bind(tokenHash, toSqliteDateTime(expiresAt), userId, expectedAuthVersion)
     .run();
+
+  if ((inserted.meta.changes ?? 0) !== 1) return null;
 
   return { token, expiresAt };
 }

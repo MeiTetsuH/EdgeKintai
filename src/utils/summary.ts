@@ -5,7 +5,7 @@ import type {
   MonthlySummary,
   User,
 } from '../types';
-import { getPublicConfig } from './config';
+import { getPublicConfig, getUserCommuteDefaults } from './config';
 import { getRequiredHolidayData, buildHolidayMap } from './holidays';
 import {
   calcWorkMinutes,
@@ -17,7 +17,17 @@ import {
   todayJST,
 } from './time';
 
-type SummaryUser = Pick<User, 'id' | 'username' | 'display_name'>;
+type SummaryUser = Pick<
+  User,
+  | 'id'
+  | 'username'
+  | 'display_name'
+  | 'default_one_way_fare'
+  | 'default_trip_type'
+  | 'default_transport_mode'
+  | 'default_transport_origin'
+  | 'default_transport_destination'
+>;
 
 export interface MonthlySummaryBuildOptions {
   /** Controls which missing scheduled days count as incomplete. Defaults to today in JST. */
@@ -54,6 +64,9 @@ function placeholderAttendance(
     transport_fee: 0,
     transport_one_way_fee: null,
     transport_trip_type: defaultTripType,
+    transport_mode: 'rail',
+    transport_origin: '',
+    transport_destination: '',
     memo: '',
     created_at: '',
     updated_at: '',
@@ -81,6 +94,7 @@ export function buildMonthlySummaryFromRecords(
   }
 
   const config = getPublicConfig(env);
+  const commuteDefaults = getUserCommuteDefaults(env, user);
   const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
   const recordMap = new Map<string, Attendance>();
   for (const record of records) {
@@ -150,7 +164,7 @@ export function buildMonthlySummaryFromRecords(
         user.id,
         dateStr,
         !isScheduled,
-        config.default_trip_type,
+        commuteDefaults.trip_type,
       );
     resultRecords.push({
       ...base,
@@ -182,6 +196,11 @@ export function buildMonthlySummaryFromRecords(
     total_transport_fee: totalTransportFee,
     overtime_minutes: overtimeMinutes,
     overtime_threshold_minutes: overtimeThresholdMinutes,
+    default_one_way_fare: commuteDefaults.one_way_fare,
+    default_trip_type: commuteDefaults.trip_type,
+    default_transport_mode: commuteDefaults.transport_mode,
+    default_transport_origin: commuteDefaults.transport_origin,
+    default_transport_destination: commuteDefaults.transport_destination,
     records: resultRecords,
     holiday_data: holidayMetadata,
   };

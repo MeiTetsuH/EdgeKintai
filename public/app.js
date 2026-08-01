@@ -9,6 +9,12 @@
     absent: '欠勤',
   });
   const TRIP_TYPES = Object.freeze({ one_way: '片道', round_trip: '往復' });
+  const TRANSPORT_MODES = Object.freeze({
+    rail: '鉄道',
+    bus: 'バス',
+    taxi: 'タクシー',
+    other: 'その他',
+  });
   const WEEKDAYS = Object.freeze(['日', '月', '火', '水', '木', '金', '土']);
   const DEFAULT_CONFIG = Object.freeze({
     timezone: 'Asia/Tokyo',
@@ -55,7 +61,6 @@
     byId('calendar-month').value = state.calendarMonth;
     byId('summary-month').value = state.summaryMonth;
     byId('admin-month').value = state.adminMonth;
-    byId('quick-edit-date').value = todayIso();
 
     try {
       await loadConfig();
@@ -102,6 +107,7 @@
       const value = validMonthValue(byId('summary-month').value);
       if (!value) return;
       state.summaryMonth = value;
+      updateExcelFilenamePreview();
       void loadSummary(true);
     });
     byId('admin-month').addEventListener('change', () => {
@@ -123,16 +129,10 @@
 
     byId('download-excel-button').addEventListener('click', handleExcelDownload);
     byId('profile-form').addEventListener('submit', handleProfileUpdate);
+    byId('profile-display-name').addEventListener('input', updateExcelFilenamePreview);
+    byId('work-defaults-form').addEventListener('submit', handleWorkDefaultsUpdate);
+    byId('commute-form').addEventListener('submit', handleCommuteUpdate);
     byId('password-form').addEventListener('submit', handlePasswordUpdate);
-    byId('quick-edit-form').addEventListener('submit', (event) => {
-      event.preventDefault();
-      const date = validDate(byId('quick-edit-date').value);
-      if (!date) {
-        toast('正しい日付を選んでください。', 'error');
-        return;
-      }
-      void openRecordEditor(date);
-    });
 
     byId('close-record-dialog').addEventListener('click', closeRecordDialog);
     byId('cancel-record-button').addEventListener('click', closeRecordDialog);
@@ -318,6 +318,10 @@
     byId('profile-trip-type').value = userTripType();
     byId('profile-clock-in').value = userClockIn();
     byId('profile-clock-out').value = userClockOut();
+    byId('profile-transport-mode').value = userTransportMode();
+    byId('profile-transport-origin').value = userTransportOrigin();
+    byId('profile-transport-destination').value = userTransportDestination();
+    updateExcelFilenamePreview();
   }
 
   function applyConfigDefaults() {
@@ -330,6 +334,9 @@
     byId('clock-break').value = String(state.config.default_break_minutes);
     byId('clock-one-way-fare').value = String(userOneWayFare());
     byId('clock-trip-type').value = userTripType();
+    byId('clock-transport-mode').value = userTransportMode();
+    byId('clock-transport-origin').value = userTransportOrigin();
+    byId('clock-transport-destination').value = userTransportDestination();
     byId('clock-in-time').value = nowTime();
     byId('clock-work-type').value = 'office';
     updateClockForm();
@@ -353,10 +360,11 @@
       else button.removeAttribute('aria-current');
     });
 
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+
     if (nextPage === 'today') await loadToday();
     if (nextPage === 'calendar') await loadCalendar(false);
     if (nextPage === 'summary') await loadSummary(false);
-    if (nextPage === 'settings') await loadRecentRecords();
     if (nextPage === 'admin') await loadAdminPage();
     byId('main-content').focus({ preventScroll: true });
   }
@@ -398,6 +406,9 @@
         break_minutes: boundedInteger(defaults.break_minutes, state.config.default_break_minutes, 0, 480),
         one_way_fare: oneWayFare,
         trip_type: tripType,
+        transport_mode: normalizeTransportMode(defaults.transport_mode) || userTransportMode(),
+        transport_origin: safeString(defaults.transport_origin, userTransportOrigin()).slice(0, 120),
+        transport_destination: safeString(defaults.transport_destination, userTransportDestination()).slice(0, 120),
       },
     };
   }
@@ -417,6 +428,12 @@
       : '0分';
     byId('today-record-fare').textContent = money(record?.transport_fee || 0);
     byId('today-record-work').textContent = formatMinutes(record?.work_minutes || 0);
+    byId('today-record-transport-mode').textContent = record?.persisted && record.work_type === 'office'
+      ? transportModeLabel(record.transport_mode)
+      : '—';
+    byId('today-record-route').textContent = record?.persisted && record.work_type === 'office'
+      ? commuteRouteLabel(record.transport_origin, record.transport_destination)
+      : '—';
 
     const badge = byId('today-record-badge');
     let status = 'empty';
@@ -436,6 +453,9 @@
     byId('clock-break').value = String(today.defaults.break_minutes);
     byId('clock-one-way-fare').value = String(today.defaults.one_way_fare);
     byId('clock-trip-type').value = today.defaults.trip_type;
+    byId('clock-transport-mode').value = today.defaults.transport_mode;
+    byId('clock-transport-origin').value = today.defaults.transport_origin;
+    byId('clock-transport-destination').value = today.defaults.transport_destination;
     updateClockFarePreview();
   }
 
@@ -489,6 +509,15 @@
             transport_trip_type: type === 'office'
               ? (normalizeTripType(byId('clock-trip-type').value) || userTripType())
               : 'one_way',
+            transport_mode: type === 'office'
+              ? (normalizeTransportMode(byId('clock-transport-mode').value) || userTransportMode())
+              : 'rail',
+            transport_origin: type === 'office'
+              ? commuteLocationInput(byId('clock-transport-origin'))
+              : '',
+            transport_destination: type === 'office'
+              ? commuteLocationInput(byId('clock-transport-destination'))
+              : '',
           };
           await api('/api/attendance/clock-in', { method: 'POST', body });
         }
@@ -610,6 +639,10 @@
         record.persisted ? (record.clock_out || '') : '',
         record.persisted && isWorking(record.work_type) ? `${record.break_minutes}分` : '',
         record.persisted && record.work_minutes !== null ? formatMinutes(record.work_minutes) : '',
+        record.persisted && record.work_type === 'office' ? transportModeLabel(record.transport_mode) : '',
+        record.persisted && record.work_type === 'office'
+          ? commuteRouteLabel(record.transport_origin, record.transport_destination, '')
+          : '',
         record.persisted && record.work_type === 'office' ? money(record.transport_one_way_fee) : '',
         record.persisted && record.work_type === 'office' ? tripTypeLabel(record.transport_trip_type) : '',
         record.persisted && record.work_type === 'office' ? money(record.transport_fee) : '',
@@ -620,7 +653,7 @@
     if (!summary.records.length) {
       const row = document.createElement('tr');
       const cell = createElement('td', { className: 'empty-table-cell', text: '記録がありません。' });
-      cell.colSpan = 9;
+      cell.colSpan = 11;
       row.append(cell);
       body.append(row);
     }
@@ -648,6 +681,9 @@
         if (!source.employee_name) source.employee_name = state.user.display_name;
         if (source.default_one_way_fare === undefined) source.default_one_way_fare = userOneWayFare();
         if (!source.default_trip_type) source.default_trip_type = userTripType();
+        if (!source.default_transport_mode) source.default_transport_mode = userTransportMode();
+        if (source.default_transport_origin === undefined) source.default_transport_origin = userTransportOrigin();
+        if (source.default_transport_destination === undefined) source.default_transport_destination = userTransportDestination();
         const blob = window.KintaiExcel.createWorkbookBlob(source, { config: state.config });
         const filename = window.KintaiExcel.filenameFor(source);
         downloadBlob(blob, filename);
@@ -667,19 +703,40 @@
     }
     const body = {
       display_name: displayName,
-      default_one_way_fare: integerInput(byId('profile-one-way-fare'), state.config.default_one_way_fare, 0, 100000),
-      default_trip_type: normalizeTripType(byId('profile-trip-type').value) || 'round_trip',
+    };
+    await saveProfileChanges(event.submitter, body, 'プロフィールを保存しました。');
+  }
+
+  async function handleWorkDefaultsUpdate(event) {
+    event.preventDefault();
+    const body = {
       default_clock_in: validTime(byId('profile-clock-in').value) || null,
       default_clock_out: validTime(byId('profile-clock-out').value) || null,
     };
-    await withBusy(event.submitter, '保存中…', async () => {
+    await saveProfileChanges(event.submitter, body, '勤務の既定値を保存しました。');
+  }
+
+  async function handleCommuteUpdate(event) {
+    event.preventDefault();
+    const body = {
+      default_one_way_fare: integerInput(byId('profile-one-way-fare'), state.config.default_one_way_fare, 0, 100000),
+      default_trip_type: normalizeTripType(byId('profile-trip-type').value) || 'round_trip',
+      default_transport_mode: normalizeTransportMode(byId('profile-transport-mode').value) || 'rail',
+      default_transport_origin: commuteLocationInput(byId('profile-transport-origin')),
+      default_transport_destination: commuteLocationInput(byId('profile-transport-destination')),
+    };
+    await saveProfileChanges(event.submitter, body, '通勤設定を保存しました。');
+  }
+
+  async function saveProfileChanges(button, body, successMessage) {
+    await withBusy(button, '保存中…', async () => {
       try {
         const response = await api('/api/auth/profile', { method: 'PATCH', body });
         state.user = normalizeUser(response.user || response.data?.user || response);
         renderUserIdentity();
         applyUserDefaults();
         state.monthCache.clear();
-        toast('個人設定を保存しました。', 'success');
+        toast(successMessage, 'success');
       } catch (error) {
         handleAuthenticatedError(error, '個人設定を保存できませんでした。');
       }
@@ -732,47 +789,6 @@
     });
   }
 
-  async function loadRecentRecords() {
-    try {
-      const current = currentMonthValue();
-      const previous = offsetMonth(current, -1);
-      const summaries = await Promise.all([loadMonthData(current, false), loadMonthData(previous, false)]);
-      const records = summaries
-        .flatMap((summary) => summary.records)
-        .filter((record) => record.persisted)
-        .sort((a, b) => b.work_date.localeCompare(a.work_date));
-      renderRecentRecords(records.slice(0, 8));
-    } catch (error) {
-      handleAuthenticatedError(error, '最近の記録を取得できませんでした。');
-    }
-  }
-
-  function renderRecentRecords(records) {
-    const container = byId('recent-records');
-    container.replaceChildren();
-    const used = new Set();
-    const items = records.map((record) => ({
-      date: record.work_date,
-      label: `${formatShortDate(record.work_date)}　${workTypeLabel(record.work_type)}`,
-    }));
-    for (let offset = 0; items.length < 8 && offset < 14; offset += 1) {
-      const date = offsetDate(todayIso(), -offset);
-      if (items.some((item) => item.date === date)) continue;
-      items.push({ date, label: `${formatShortDate(date)}　未記録` });
-    }
-    for (const item of items) {
-      if (used.has(item.date)) continue;
-      used.add(item.date);
-      const button = createElement('button', {
-        className: 'recent-record-button',
-        type: 'button',
-        text: item.label,
-      });
-      button.addEventListener('click', () => void openRecordEditor(item.date));
-      container.append(button);
-    }
-  }
-
   async function openRecordEditor(date, providedSummary) {
     const valid = validDate(date);
     if (!valid) {
@@ -805,6 +821,15 @@
     byId('record-trip-type').value = record.persisted
       ? (normalizeTripType(record.transport_trip_type) || userTripType())
       : userTripType();
+    byId('record-transport-mode').value = record.persisted
+      ? (normalizeTransportMode(record.transport_mode) || userTransportMode())
+      : userTransportMode();
+    byId('record-transport-origin').value = record.persisted
+      ? record.transport_origin
+      : userTransportOrigin();
+    byId('record-transport-destination').value = record.persisted
+      ? record.transport_destination
+      : userTransportDestination();
     byId('record-memo').value = record.persisted ? record.memo : '';
     byId('delete-record-button').hidden = !record.persisted;
     byId('record-form').dataset.workType = defaultType;
@@ -814,6 +839,7 @@
   function updateRecordForm() {
     const type = normalizeWorkType(byId('record-work-type').value) || 'office';
     const previousType = normalizeWorkType(byId('record-form').dataset.workType);
+    const originalRecord = state.editorRecord;
     const working = isWorking(type);
     const office = type === 'office';
     document.querySelectorAll('[data-record-working-field]').forEach((field) => {
@@ -829,17 +855,42 @@
       byId('record-clock-out').value = '';
       byId('record-break').value = '0';
       byId('record-one-way-fare').value = '0';
+      byId('record-transport-origin').value = '';
+      byId('record-transport-destination').value = '';
     } else {
       if (previousType && !isWorking(previousType)) {
-        byId('record-break').value = String(state.config.default_break_minutes);
-        byId('record-clock-in').value = userClockIn();
-        byId('record-clock-out').value = userClockOut();
+        const restoreOriginalWorkingRecord = originalRecord?.persisted && isWorking(originalRecord.work_type);
+        byId('record-break').value = String(
+          restoreOriginalWorkingRecord ? originalRecord.break_minutes : state.config.default_break_minutes,
+        );
+        byId('record-clock-in').value = restoreOriginalWorkingRecord
+          ? (originalRecord.clock_in || '')
+          : userClockIn();
+        byId('record-clock-out').value = restoreOriginalWorkingRecord
+          ? (originalRecord.clock_out || '')
+          : userClockOut();
       }
       if (office && previousType && previousType !== 'office') {
-        byId('record-one-way-fare').value = String(userOneWayFare());
-        byId('record-trip-type').value = userTripType();
+        const restoreOriginalCommute = originalRecord?.persisted && originalRecord.work_type === 'office';
+        byId('record-one-way-fare').value = String(
+          restoreOriginalCommute ? originalRecord.transport_one_way_fee : userOneWayFare(),
+        );
+        byId('record-trip-type').value = restoreOriginalCommute
+          ? (normalizeTripType(originalRecord.transport_trip_type) || userTripType())
+          : userTripType();
+        byId('record-transport-mode').value = restoreOriginalCommute
+          ? (normalizeTransportMode(originalRecord.transport_mode) || userTransportMode())
+          : userTransportMode();
+        byId('record-transport-origin').value = restoreOriginalCommute
+          ? originalRecord.transport_origin
+          : userTransportOrigin();
+        byId('record-transport-destination').value = restoreOriginalCommute
+          ? originalRecord.transport_destination
+          : userTransportDestination();
       } else if (!office) {
         byId('record-one-way-fare').value = '0';
+        byId('record-transport-origin').value = '';
+        byId('record-transport-destination').value = '';
       }
     }
     byId('record-form').dataset.workType = type;
@@ -883,6 +934,15 @@
         transport_trip_type: type === 'office'
           ? (normalizeTripType(byId('record-trip-type').value) || userTripType())
           : 'one_way',
+        transport_mode: type === 'office'
+          ? (normalizeTransportMode(byId('record-transport-mode').value) || userTransportMode())
+          : 'rail',
+        transport_origin: type === 'office'
+          ? commuteLocationInput(byId('record-transport-origin'))
+          : '',
+        transport_destination: type === 'office'
+          ? commuteLocationInput(byId('record-transport-destination'))
+          : '',
         memo,
       };
     }
@@ -931,6 +991,9 @@
       break_minutes: 0,
       transport_one_way_fee: 0,
       transport_trip_type: 'one_way',
+      transport_mode: 'rail',
+      transport_origin: '',
+      transport_destination: '',
       memo,
     };
   }
@@ -940,7 +1003,6 @@
     if (date === (state.today?.date || todayIso())) tasks.push(loadToday());
     if (state.page === 'calendar') tasks.push(loadCalendar(true));
     if (state.page === 'summary') tasks.push(loadSummary(true));
-    if (state.page === 'settings') tasks.push(loadRecentRecords());
     await Promise.all(tasks);
   }
 
@@ -1142,6 +1204,9 @@
       transport_one_way_fee: oneWayFare,
       transport_trip_type: trip,
       transport_fee: totalFare,
+      transport_mode: normalizeTransportMode(source.transport_mode),
+      transport_origin: safeString(source.transport_origin, '').slice(0, 120),
+      transport_destination: safeString(source.transport_destination, '').slice(0, 120),
       memo: safeString(source.memo, ''),
       day_of_week: boundedInteger(source.day_of_week ?? extra.day_of_week, date ? weekdayIndex(date) : 0, 0, 6),
       is_holiday: Boolean(source.is_holiday ?? extra.is_holiday),
@@ -1162,9 +1227,7 @@
       total_work_minutes: 0,
       total_transport_fee: 0,
     };
-    const recordDates = new Set();
     records.forEach((record) => {
-      recordDates.add(record.work_date);
       if (record.day_of_week !== 0 && record.day_of_week !== 6 && !record.is_holiday) result.scheduled_work_days += 1;
       if (!record.persisted) return;
       if (record.work_type === 'office') result.office_days += 1;
@@ -1194,7 +1257,10 @@
     state[stateKey] = offsetMonth(state[stateKey], delta);
     byId(`${target}-month`).value = state[stateKey];
     if (target === 'calendar') void loadCalendar(false);
-    if (target === 'summary') void loadSummary(false);
+    if (target === 'summary') {
+      updateExcelFilenamePreview();
+      void loadSummary(false);
+    }
     if (target === 'admin') void loadAdminOverview();
   }
 
@@ -1293,6 +1359,9 @@
       default_trip_type: normalizeTripType(source.default_trip_type) || state.config.default_trip_type,
       default_clock_in: validTime(source.default_clock_in) || null,
       default_clock_out: validTime(source.default_clock_out) || null,
+      default_transport_mode: normalizeTransportMode(source.default_transport_mode) || 'rail',
+      default_transport_origin: safeString(source.default_transport_origin, '').slice(0, 120),
+      default_transport_destination: safeString(source.default_transport_destination, '').slice(0, 120),
     };
   }
 
@@ -1312,6 +1381,18 @@
     return state.user?.default_clock_out || state.config.default_clock_out || '';
   }
 
+  function userTransportMode() {
+    return normalizeTransportMode(state.user?.default_transport_mode) || 'rail';
+  }
+
+  function userTransportOrigin() {
+    return safeString(state.user?.default_transport_origin, '').slice(0, 120);
+  }
+
+  function userTransportDestination() {
+    return safeString(state.user?.default_transport_destination, '').slice(0, 120);
+  }
+
   function normalizeWorkType(value) {
     return Object.prototype.hasOwnProperty.call(WORK_TYPES, value) ? value : null;
   }
@@ -1320,12 +1401,27 @@
     return Object.prototype.hasOwnProperty.call(TRIP_TYPES, value) ? value : null;
   }
 
+  function normalizeTransportMode(value) {
+    return Object.prototype.hasOwnProperty.call(TRANSPORT_MODES, value) ? value : null;
+  }
+
   function workTypeLabel(value) {
     return WORK_TYPES[value] || '不明';
   }
 
   function tripTypeLabel(value) {
     return TRIP_TYPES[value] || '不明';
+  }
+
+  function transportModeLabel(value) {
+    return TRANSPORT_MODES[value] || '未設定';
+  }
+
+  function commuteRouteLabel(origin, destination, fallback = '未設定') {
+    const from = safeString(origin, '').trim();
+    const to = safeString(destination, '').trim();
+    if (from && to) return `${from} → ${to}`;
+    return from || to || fallback;
   }
 
   function isWorking(value) {
@@ -1390,13 +1486,6 @@
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
   }
 
-  function offsetDate(value, delta) {
-    const valid = validDate(value) || todayIso();
-    const parts = valid.split('-').map(Number);
-    const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + delta));
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
-  }
-
   function weekdayIndex(value) {
     const date = validDate(value);
     if (!date) return 0;
@@ -1454,13 +1543,6 @@
     return `${year}年${month}月${day}日`;
   }
 
-  function formatShortDate(value) {
-    const valid = validDate(value);
-    if (!valid) return '日付不明';
-    const [, month, day] = valid.split('-').map(Number);
-    return `${month}/${day}（${WEEKDAYS[weekdayIndex(valid)]}）`;
-  }
-
   function formatDateTime(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
@@ -1488,6 +1570,22 @@
   function integerInput(input, fallback, min, max) {
     if (!input || String(input.value).trim() === '') return fallback;
     return boundedInteger(input.value, fallback, min, max);
+  }
+
+  function commuteLocationInput(input) {
+    return String(input?.value || '').normalize('NFKC').trim().slice(0, 120);
+  }
+
+  function updateExcelFilenamePreview() {
+    const preview = byId('excel-filename-preview');
+    if (!preview) return;
+    const [year, month] = splitMonth(state.summaryMonth || currentMonthValue());
+    const employeeName = byId('profile-display-name')?.value.trim()
+      || state.user?.display_name
+      || '氏名未設定';
+    preview.textContent = window.KintaiExcel?.filenameFor
+      ? window.KintaiExcel.filenameFor({ year, month, employee_name: employeeName })
+      : `勤怠表_${employeeName}_${year}${String(month).padStart(2, '0')}.xlsx`;
   }
 
   function normalizeNewUsername(value) {
