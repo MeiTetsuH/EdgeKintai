@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "edge-kintai",
+  "name": "worktime",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-29",
   "compatibility_flags": ["nodejs_compat"],
@@ -31,7 +31,7 @@
     {
       "binding": "DB",
       "database_name": "edge-kintai-db-v2",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "100c4dfd-b2e1-4c43-860d-7d3291e1bf11",
       "migrations_dir": "migrations"
     }
   ],
