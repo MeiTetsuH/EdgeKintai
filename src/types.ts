@@ -15,6 +15,8 @@ export interface User {
   default_transport_destination: string;
   default_clock_in: string | null;
   default_clock_out: string | null;
+  default_break_minutes: number;
+  default_work_type: 'office' | 'remote';
   auth_version: number;
 }
 

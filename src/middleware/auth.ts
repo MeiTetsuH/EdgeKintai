@@ -74,6 +74,8 @@ export async function getSessionUser(
        u.default_transport_destination,
        u.default_clock_in,
        u.default_clock_out,
+       u.default_break_minutes,
+       u.default_work_type,
        u.auth_version
      FROM sessions AS s
      INNER JOIN users AS u ON u.id = s.user_id

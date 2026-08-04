@@ -118,8 +118,6 @@
     });
 
     byId('clock-work-type').addEventListener('change', updateClockForm);
-    byId('clock-one-way-fare').addEventListener('input', updateClockFarePreview);
-    byId('clock-trip-type').addEventListener('change', updateClockFarePreview);
     byId('clock-in-form').addEventListener('submit', handleClockIn);
     byId('clock-out-button').addEventListener('click', handleClockOut);
     byId('edit-today-button').addEventListener('click', () => {
@@ -147,6 +145,28 @@
     byId('delete-record-button').addEventListener('click', handleRecordDelete);
 
     byId('admin-add-user-form').addEventListener('submit', handleAdminAddUser);
+    document.addEventListener('click', handleTimeStepper);
+  }
+
+  function handleTimeStepper(event) {
+    const btn = event.target.closest('[data-time-target]');
+    if (!btn) return;
+    const targetId = btn.dataset.timeTarget;
+    const step = Number(btn.dataset.step) || 15;
+    const input = byId(targetId);
+    if (!input || input.disabled) return;
+
+    const time = validTime(input.value) || nowTime();
+    const parts = time.split(':').map(Number);
+    let totalMinutes = parts[0] * 60 + parts[1] + step;
+    if (totalMinutes < 0) totalMinutes += 1440;
+    totalMinutes = totalMinutes % 1440;
+
+    const newHours = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+    const newMinutes = String(totalMinutes % 60).padStart(2, '0');
+    input.value = `${newHours}:${newMinutes}`;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   async function loadConfig() {
@@ -318,6 +338,8 @@
     byId('profile-trip-type').value = userTripType();
     byId('profile-clock-in').value = userClockIn();
     byId('profile-clock-out').value = userClockOut();
+    byId('profile-break').value = String(userBreakMinutes());
+    byId('profile-work-type').value = userWorkType();
     byId('profile-transport-mode').value = userTransportMode();
     byId('profile-transport-origin').value = userTransportOrigin();
     byId('profile-transport-destination').value = userTransportDestination();
@@ -331,14 +353,9 @@
   }
 
   function applyUserDefaults() {
-    byId('clock-break').value = String(state.config.default_break_minutes);
-    byId('clock-one-way-fare').value = String(userOneWayFare());
-    byId('clock-trip-type').value = userTripType();
-    byId('clock-transport-mode').value = userTransportMode();
-    byId('clock-transport-origin').value = userTransportOrigin();
-    byId('clock-transport-destination').value = userTransportDestination();
+    byId('clock-break').value = String(userBreakMinutes());
     byId('clock-in-time').value = nowTime();
-    byId('clock-work-type').value = 'office';
+    byId('clock-work-type').value = userWorkType();
     updateClockForm();
   }
 
@@ -404,6 +421,7 @@
       }) : null,
       defaults: {
         break_minutes: boundedInteger(defaults.break_minutes, state.config.default_break_minutes, 0, 480),
+        work_type: workingType(defaults.work_type) || userWorkType(),
         one_way_fare: oneWayFare,
         trip_type: tripType,
         transport_mode: normalizeTransportMode(defaults.transport_mode) || userTransportMode(),
@@ -451,34 +469,26 @@
     byId('clock-out-button').disabled = !(record?.clock_in && !record.clock_out);
     byId('clock-in-button').disabled = Boolean(record?.clock_in || (record?.persisted && !isWorking(record.work_type)));
     byId('clock-break').value = String(today.defaults.break_minutes);
-    byId('clock-one-way-fare').value = String(today.defaults.one_way_fare);
-    byId('clock-trip-type').value = today.defaults.trip_type;
-    byId('clock-transport-mode').value = today.defaults.transport_mode;
-    byId('clock-transport-origin').value = today.defaults.transport_origin;
-    byId('clock-transport-destination').value = today.defaults.transport_destination;
-    updateClockFarePreview();
+    if (!record?.persisted) byId('clock-work-type').value = today.defaults.work_type;
+    updateClockForm();
   }
 
   function updateClockForm() {
     const type = normalizeWorkType(byId('clock-work-type').value) || 'office';
     const working = isWorking(type);
-    const office = type === 'office';
     document.querySelectorAll('[data-working-field]').forEach((field) => {
       field.hidden = !working;
       field.querySelectorAll('input, select').forEach((input) => { input.disabled = !working; });
     });
-    document.querySelectorAll('[data-office-field]').forEach((field) => {
-      field.hidden = !office;
-      field.querySelectorAll('input, select').forEach((input) => { input.disabled = !office; });
-    });
-    byId('clock-in-button').textContent = working ? '出勤する' : `${workTypeLabel(type)}として記録`;
-    updateClockFarePreview();
+    byId('clock-in-button').textContent = working ? '出勤' : `${workTypeLabel(type)}として記録`;
   }
 
-  function updateClockFarePreview() {
-    const fare = integerInput(byId('clock-one-way-fare'), 0, 0, 100000);
-    const trip = normalizeTripType(byId('clock-trip-type').value) || 'round_trip';
-    byId('clock-fare-preview').textContent = money(fare * (trip === 'round_trip' ? 2 : 1));
+  function updateRecordFarePreview() {
+    const type = normalizeWorkType(byId('record-work-type').value);
+    const fare = type === 'office' ? integerInput(byId('record-one-way-fare'), 0, 0, 100000) : 0;
+    const tripVal = byId('record-trip-type').value;
+    const multiplier = tripVal === 'round_trip' ? 2 : (tripVal === 'one_way' ? 1 : 0);
+    byId('record-fare-preview').textContent = money(fare * multiplier);
   }
 
   async function handleClockIn(event) {
@@ -502,22 +512,12 @@
           const body = {
             work_type: type,
             clock_in: clockIn,
-            break_minutes: integerInput(byId('clock-break'), state.config.default_break_minutes, 0, 480),
-            transport_one_way_fee: type === 'office'
-              ? integerInput(byId('clock-one-way-fare'), userOneWayFare(), 0, 100000)
-              : 0,
-            transport_trip_type: type === 'office'
-              ? (normalizeTripType(byId('clock-trip-type').value) || userTripType())
-              : 'one_way',
-            transport_mode: type === 'office'
-              ? (normalizeTransportMode(byId('clock-transport-mode').value) || userTransportMode())
-              : 'rail',
-            transport_origin: type === 'office'
-              ? commuteLocationInput(byId('clock-transport-origin'))
-              : '',
-            transport_destination: type === 'office'
-              ? commuteLocationInput(byId('clock-transport-destination'))
-              : '',
+            break_minutes: integerInput(byId('clock-break'), userBreakMinutes(), 0, 480),
+            transport_one_way_fee: type === 'office' ? userOneWayFare() : 0,
+            transport_trip_type: type === 'office' ? userTripType() : 'one_way',
+            transport_mode: type === 'office' ? userTransportMode() : 'rail',
+            transport_origin: type === 'office' ? userTransportOrigin() : '',
+            transport_destination: type === 'office' ? userTransportDestination() : '',
           };
           await api('/api/attendance/clock-in', { method: 'POST', body });
         }
@@ -712,6 +712,8 @@
     const body = {
       default_clock_in: validTime(byId('profile-clock-in').value) || null,
       default_clock_out: validTime(byId('profile-clock-out').value) || null,
+      default_break_minutes: integerInput(byId('profile-break'), userBreakMinutes(), 0, 480),
+      default_work_type: workingType(byId('profile-work-type').value) || 'office',
     };
     await saveProfileChanges(event.submitter, body, '勤務の既定値を保存しました。');
   }
@@ -810,13 +812,13 @@
   function fillRecordDialog(record) {
     const defaultType = record.persisted
       ? (normalizeWorkType(record.work_type) || 'office')
-      : (record.is_holiday || record.day_of_week === 0 || record.day_of_week === 6 ? 'holiday' : 'office');
+      : (record.is_holiday || record.day_of_week === 0 || record.day_of_week === 6 ? 'holiday' : userWorkType());
     byId('record-date').value = record.work_date;
     byId('record-date-context').textContent = `${formatJapaneseDate(record.work_date)}（${WEEKDAYS[record.day_of_week] || ''}）${record.holiday_name ? `　${record.holiday_name}` : ''}`;
     byId('record-work-type').value = defaultType;
     byId('record-clock-in').value = record.persisted ? (record.clock_in || '') : userClockIn();
     byId('record-clock-out').value = record.persisted ? (record.clock_out || '') : userClockOut();
-    byId('record-break').value = String(record.persisted ? record.break_minutes : state.config.default_break_minutes);
+    byId('record-break').value = String(record.persisted ? record.break_minutes : userBreakMinutes());
     byId('record-one-way-fare').value = String(record.persisted ? record.transport_one_way_fee : userOneWayFare());
     byId('record-trip-type').value = record.persisted
       ? (normalizeTripType(record.transport_trip_type) || userTripType())
@@ -861,7 +863,7 @@
       if (previousType && !isWorking(previousType)) {
         const restoreOriginalWorkingRecord = originalRecord?.persisted && isWorking(originalRecord.work_type);
         byId('record-break').value = String(
-          restoreOriginalWorkingRecord ? originalRecord.break_minutes : state.config.default_break_minutes,
+          restoreOriginalWorkingRecord ? originalRecord.break_minutes : userBreakMinutes(),
         );
         byId('record-clock-in').value = restoreOriginalWorkingRecord
           ? (originalRecord.clock_in || '')
@@ -895,13 +897,6 @@
     }
     byId('record-form').dataset.workType = type;
     updateRecordFarePreview();
-  }
-
-  function updateRecordFarePreview() {
-    const type = normalizeWorkType(byId('record-work-type').value);
-    const fare = type === 'office' ? integerInput(byId('record-one-way-fare'), 0, 0, 100000) : 0;
-    const trip = normalizeTripType(byId('record-trip-type').value) || 'round_trip';
-    byId('record-fare-preview').textContent = money(fare * (trip === 'round_trip' ? 2 : 1));
   }
 
   async function handleRecordSave(event) {
@@ -1359,6 +1354,13 @@
       default_trip_type: normalizeTripType(source.default_trip_type) || state.config.default_trip_type,
       default_clock_in: validTime(source.default_clock_in) || null,
       default_clock_out: validTime(source.default_clock_out) || null,
+      default_break_minutes: boundedInteger(
+        source.default_break_minutes,
+        state.config.default_break_minutes,
+        0,
+        480,
+      ),
+      default_work_type: workingType(source.default_work_type) || 'office',
       default_transport_mode: normalizeTransportMode(source.default_transport_mode) || 'rail',
       default_transport_origin: safeString(source.default_transport_origin, '').slice(0, 120),
       default_transport_destination: safeString(source.default_transport_destination, '').slice(0, 120),
@@ -1381,6 +1383,19 @@
     return state.user?.default_clock_out || state.config.default_clock_out || '';
   }
 
+  function userBreakMinutes() {
+    return boundedInteger(
+      state.user?.default_break_minutes,
+      state.config.default_break_minutes,
+      0,
+      480,
+    );
+  }
+
+  function userWorkType() {
+    return workingType(state.user?.default_work_type) || 'office';
+  }
+
   function userTransportMode() {
     return normalizeTransportMode(state.user?.default_transport_mode) || 'rail';
   }
@@ -1395,6 +1410,11 @@
 
   function normalizeWorkType(value) {
     return Object.prototype.hasOwnProperty.call(WORK_TYPES, value) ? value : null;
+  }
+
+  function workingType(value) {
+    const type = normalizeWorkType(value);
+    return isWorking(type) ? type : null;
   }
 
   function normalizeTripType(value) {

@@ -3,12 +3,15 @@ import { adminGuard } from '../middleware/adminGuard';
 import { authMiddleware, type AuthEnv } from '../middleware/auth';
 import type { Attendance, User } from '../types';
 import { stringifyAuditJson } from '../utils/audit';
+import { getPublicConfig } from '../utils/config';
 import { getRequiredHolidayData } from '../utils/holidays';
 import { hashPassword } from '../utils/password';
 import { buildMonthlySummaryFromRecords } from '../utils/summary';
 import { monthStart, nextMonthStart } from '../utils/time';
 import {
   displayNameValue,
+  boundedInteger,
+  defaultWorkTypeValue,
   nullableBoundedInteger,
   optionalString,
   passwordValue,
@@ -33,7 +36,7 @@ admin.get('/users', async (c) => {
     `SELECT id, username, display_name, is_admin, created_at,
             default_one_way_fare, default_trip_type,
             default_transport_mode, default_transport_origin, default_transport_destination,
-            default_clock_in, default_clock_out
+            default_clock_in, default_clock_out, default_break_minutes, default_work_type
      FROM users ORDER BY display_name COLLATE NOCASE, id`,
   ).all<ManagedUser>();
   return c.json({ users: result.results });
@@ -60,6 +63,14 @@ admin.post('/users', async (c) => {
   const defaultTransportDestination = optionalString(body.default_transport_destination, '到达地', 120) ?? '';
   const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
   const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
+  const defaultBreakMinutes = boundedInteger(
+    body.default_break_minutes,
+    '默认休息分钟',
+    0,
+    480,
+    getPublicConfig(c.env).default_break_minutes,
+  );
+  const defaultWorkType = defaultWorkTypeValue(body.default_work_type, 'office');
   const passwordHash = await hashPassword(password);
 
   let user: ManagedUser | undefined;
@@ -69,12 +80,12 @@ admin.post('/users', async (c) => {
          username, password_hash, display_name, is_admin,
          default_one_way_fare, default_trip_type,
          default_transport_mode, default_transport_origin, default_transport_destination,
-         default_clock_in, default_clock_out
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         default_clock_in, default_clock_out, default_break_minutes, default_work_type
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id, username, display_name, is_admin, created_at,
                  default_one_way_fare, default_trip_type,
                  default_transport_mode, default_transport_origin, default_transport_destination,
-                 default_clock_in, default_clock_out`,
+                 default_clock_in, default_clock_out, default_break_minutes, default_work_type`,
     ).bind(
       username,
       passwordHash,
@@ -87,6 +98,8 @@ admin.post('/users', async (c) => {
       defaultTransportDestination,
       defaultClockIn,
       defaultClockOut,
+      defaultBreakMinutes,
+      defaultWorkType,
     );
     const audit = c.env.DB.prepare(
       `INSERT INTO audit_logs (
@@ -108,6 +121,8 @@ admin.post('/users', async (c) => {
         default_transport_destination: defaultTransportDestination,
         default_clock_in: defaultClockIn,
         default_clock_out: defaultClockOut,
+        default_break_minutes: defaultBreakMinutes,
+        default_work_type: defaultWorkType,
       }),
       username,
     );
@@ -155,6 +170,12 @@ admin.patch('/users/:id', async (c) => {
   const defaultClockOut = body.default_clock_out === undefined
     ? existing.default_clock_out
     : nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
+  const defaultBreakMinutes = body.default_break_minutes === undefined
+    ? existing.default_break_minutes
+    : boundedInteger(body.default_break_minutes, '默认休息分钟', 0, 480);
+  const defaultWorkType = body.default_work_type === undefined
+    ? existing.default_work_type
+    : defaultWorkTypeValue(body.default_work_type);
 
   if (existing.is_admin === 1 && isAdmin === 0) {
     const otherAdmin = await c.env.DB.prepare(
@@ -174,12 +195,14 @@ admin.patch('/users/:id', async (c) => {
          default_transport_destination = ?,
          default_clock_in = ?,
          default_clock_out = ?,
+         default_break_minutes = ?,
+         default_work_type = ?,
          auth_version = CASE WHEN is_admin <> ? THEN auth_version + 1 ELSE auth_version END
      WHERE id = ?
      RETURNING id, username, display_name, is_admin, created_at,
                default_one_way_fare, default_trip_type,
                default_transport_mode, default_transport_origin, default_transport_destination,
-               default_clock_in, default_clock_out`,
+               default_clock_in, default_clock_out, default_break_minutes, default_work_type`,
   ).bind(
     displayName,
     isAdmin,
@@ -190,6 +213,8 @@ admin.patch('/users/:id', async (c) => {
     defaultTransportDestination,
     defaultClockIn,
     defaultClockOut,
+    defaultBreakMinutes,
+    defaultWorkType,
     isAdmin,
     targetId,
   );
@@ -204,6 +229,8 @@ admin.patch('/users/:id', async (c) => {
     default_transport_destination: defaultTransportDestination,
     default_clock_in: defaultClockIn,
     default_clock_out: defaultClockOut,
+    default_break_minutes: defaultBreakMinutes,
+    default_work_type: defaultWorkType,
   };
   let results: D1Result<unknown>[];
   try {
@@ -273,7 +300,7 @@ admin.get('/overview/:year/:month', async (c) => {
       `SELECT id, username, display_name, is_admin, created_at,
               default_one_way_fare, default_trip_type,
               default_transport_mode, default_transport_origin, default_transport_destination,
-              default_clock_in, default_clock_out
+              default_clock_in, default_clock_out, default_break_minutes, default_work_type
        FROM users ORDER BY display_name COLLATE NOCASE, id`,
     ).all<ManagedUser>(),
     c.env.DB.prepare(
@@ -320,7 +347,7 @@ async function getUser(env: CloudflareBindings, id: number): Promise<ManagedUser
     `SELECT id, username, display_name, is_admin, created_at,
             default_one_way_fare, default_trip_type,
             default_transport_mode, default_transport_origin, default_transport_destination,
-            default_clock_in, default_clock_out
+            default_clock_in, default_clock_out, default_break_minutes, default_work_type
      FROM users WHERE id = ?`,
   ).bind(id).first<ManagedUser>();
 }

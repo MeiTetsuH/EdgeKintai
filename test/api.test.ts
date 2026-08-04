@@ -99,6 +99,8 @@ describe('EdgeKintai API', () => {
       default_transport_mode: 'bus',
       default_transport_origin: '渋谷駅西口',
       default_transport_destination: '品川駅港南口',
+      default_break_minutes: 45,
+      default_work_type: 'remote',
     }, cookie);
     expect(profile.status).toBe(200);
     expect(await profile.json()).toMatchObject({
@@ -110,6 +112,8 @@ describe('EdgeKintai API', () => {
         default_transport_mode: 'bus',
         default_transport_origin: '渋谷駅西口',
         default_transport_destination: '品川駅港南口',
+        default_break_minutes: 45,
+        default_work_type: 'remote',
       },
     });
 
@@ -217,6 +221,36 @@ describe('EdgeKintai API', () => {
     expect(serializedAudit?.value ?? '').not.toContain('品川駅港南口');
   });
 
+  it('uses each user attendance defaults for new records', async () => {
+    const { cookie } = await setupAdmin();
+    const profile = await jsonRequest('/api/auth/profile', 'PATCH', {
+      default_break_minutes: 45,
+      default_work_type: 'remote',
+    }, cookie);
+    expect(profile.status).toBe(200);
+
+    const today = await SELF.fetch(`${origin}/api/attendance/today`, {
+      headers: { Cookie: cookie },
+    });
+    expect(today.status).toBe(200);
+    expect(await today.json()).toMatchObject({
+      defaults: { break_minutes: 45, work_type: 'remote' },
+    });
+
+    const record = await jsonRequest('/api/attendance/2026-07-06', 'PUT', {
+      clock_in: '10:00',
+      clock_out: '19:00',
+    }, cookie);
+    expect(record.status).toBe(200);
+    expect(await record.json()).toMatchObject({
+      record: {
+        work_type: 'remote',
+        break_minutes: 45,
+        transport_fee: 0,
+      },
+    });
+  });
+
   it('backfills attendance and calculates round-trip fare on the server', async () => {
     const { cookie } = await setupAdmin();
     const office = await jsonRequest('/api/attendance/2026-07-01', 'PUT', {
@@ -289,6 +323,8 @@ describe('EdgeKintai API', () => {
     expect(today.status).toBe(200);
     expect(await today.json()).toMatchObject({
       defaults: {
+        break_minutes: 60,
+        work_type: 'office',
         one_way_fare: 220,
         trip_type: 'round_trip',
         transport_mode: 'rail',

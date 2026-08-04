@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { TransportMode, TransportTripType, User } from '../types';
 import { stringifyAuditJson } from '../utils/audit';
+import { getPublicConfig } from '../utils/config';
 import { hashPassword, verifyPassword, verifySecret } from '../utils/password';
 import {
   authMiddleware,
@@ -15,6 +16,7 @@ import {
 } from '../middleware/auth';
 import {
   boundedInteger,
+  defaultWorkTypeValue,
   displayNameValue,
   optionalString,
   passwordValue,
@@ -44,6 +46,8 @@ type PublicUser = Pick<
   | 'default_transport_destination'
   | 'default_clock_in'
   | 'default_clock_out'
+  | 'default_break_minutes'
+  | 'default_work_type'
 >;
 
 type LoginUser = User & { password_hash: string };
@@ -70,6 +74,8 @@ function toPublicUser(user: User): PublicUser {
     default_transport_destination: user.default_transport_destination,
     default_clock_in: user.default_clock_in,
     default_clock_out: user.default_clock_out,
+    default_break_minutes: user.default_break_minutes,
+    default_work_type: user.default_work_type,
   };
 }
 
@@ -144,12 +150,16 @@ auth.post('/setup', async (c) => {
     'default_transport_destination',
     'default_clock_in',
     'default_clock_out',
+    'default_break_minutes',
+    'default_work_type',
   ]);
 
-  const setupRate = await c.env.AUTH_RATE_LIMITER.limit({
-    key: `setup:${clientAddress(c.req.raw)}`,
-  });
-  if (!setupRate.success) return c.json({ error: '尝试次数过多，请稍后再试' }, 429);
+  const setupAllowed = await checkRateLimit(
+    c.env.AUTH_RATE_LIMITER,
+    `setup:${clientAddress(c.req.raw)}`,
+    c.req.raw,
+  );
+  if (!setupAllowed) return c.json({ error: '尝试次数过多，请稍后再试' }, 429);
 
   const providedSetupToken = typeof body.setup_token === 'string' ? body.setup_token : '';
   const expectedSetupToken = c.env.SETUP_TOKEN;
@@ -175,6 +185,14 @@ auth.post('/setup', async (c) => {
   const defaultTransportDestination = optionalString(body.default_transport_destination, '到达地', 120) ?? '';
   const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
   const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
+  const defaultBreakMinutes = boundedInteger(
+    body.default_break_minutes,
+    '默认休息分钟',
+    0,
+    480,
+    getPublicConfig(c.env).default_break_minutes,
+  );
+  const defaultWorkType = defaultWorkTypeValue(body.default_work_type, 'office');
   const passwordHash = await hashPassword(password);
   const createdAt = new Date().toISOString();
 
@@ -191,9 +209,11 @@ auth.post('/setup', async (c) => {
        default_transport_destination,
        default_clock_in,
        default_clock_out,
+       default_break_minutes,
+       default_work_type,
        created_at
      )
-     SELECT ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?
+     SELECT ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
      WHERE NOT EXISTS (SELECT 1 FROM users)
      RETURNING
        id,
@@ -208,6 +228,8 @@ auth.post('/setup', async (c) => {
        default_transport_destination,
        default_clock_in,
        default_clock_out,
+       default_break_minutes,
+       default_work_type,
        auth_version`,
   ).bind(
     username,
@@ -220,6 +242,8 @@ auth.post('/setup', async (c) => {
     defaultTransportDestination,
     defaultClockIn,
     defaultClockOut,
+    defaultBreakMinutes,
+    defaultWorkType,
     createdAt,
   );
   const setupAudit = c.env.DB.prepare(
@@ -241,6 +265,8 @@ auth.post('/setup', async (c) => {
       default_transport_destination: defaultTransportDestination,
       default_clock_in: defaultClockIn,
       default_clock_out: defaultClockOut,
+      default_break_minutes: defaultBreakMinutes,
+      default_work_type: defaultWorkType,
     }),
     username,
     createdAt,
@@ -265,15 +291,11 @@ auth.post('/login', async (c) => {
   assertOnlyKeys(body, ['username', 'password']);
   const username = loginIdentifier(body.username, '登录名', 64);
   const password = credentialString(body.password, '密码', 128);
-  const [addressRate, accountRate] = await Promise.all([
-    c.env.AUTH_RATE_LIMITER.limit({
-      key: `login-ip:${clientAddress(c.req.raw)}`,
-    }),
-    c.env.AUTH_RATE_LIMITER.limit({
-      key: `login-account:${username.toLowerCase()}`,
-    }),
+  const [addressAllowed, accountAllowed] = await Promise.all([
+    checkRateLimit(c.env.AUTH_RATE_LIMITER, `login-ip:${clientAddress(c.req.raw)}`, c.req.raw),
+    checkRateLimit(c.env.AUTH_RATE_LIMITER, `login-account:${username.toLowerCase()}`, c.req.raw),
   ]);
-  if (!addressRate.success || !accountRate.success) {
+  if (!addressAllowed || !accountAllowed) {
     return c.json({ error: '尝试次数过多，请稍后再试' }, 429);
   }
 
@@ -292,6 +314,8 @@ auth.post('/login', async (c) => {
        default_transport_destination,
        default_clock_in,
        default_clock_out,
+       default_break_minutes,
+       default_work_type,
        auth_version
      FROM users
      WHERE username = ?
@@ -356,6 +380,8 @@ auth.patch('/profile', authMiddleware, async (c) => {
     'default_transport_destination',
     'default_clock_in',
     'default_clock_out',
+    'default_break_minutes',
+    'default_work_type',
   ]);
 
   const assignments: string[] = [];
@@ -374,6 +400,12 @@ auth.patch('/profile', authMiddleware, async (c) => {
     : optionalString(body.default_transport_destination, '到达地', 120) ?? '';
   const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间');
   const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间');
+  const defaultBreakMinutes = body.default_break_minutes === undefined
+    ? undefined
+    : boundedInteger(body.default_break_minutes, '默认休息分钟', 0, 480);
+  const defaultWorkType = body.default_work_type === undefined
+    ? undefined
+    : defaultWorkTypeValue(body.default_work_type);
 
   if (displayName !== undefined) {
     assignments.push('display_name = ?');
@@ -415,6 +447,16 @@ auth.patch('/profile', authMiddleware, async (c) => {
     values.push(defaultClockOut ?? null);
   }
 
+  if (defaultBreakMinutes !== undefined) {
+    assignments.push('default_break_minutes = ?');
+    values.push(defaultBreakMinutes);
+  }
+
+  if (defaultWorkType !== undefined) {
+    assignments.push('default_work_type = ?');
+    values.push(defaultWorkType);
+  }
+
   if (assignments.length === 0) {
     throw new RequestValidationError('请至少提交一个可修改字段');
   }
@@ -437,6 +479,8 @@ auth.patch('/profile', authMiddleware, async (c) => {
        default_transport_destination,
        default_clock_in,
        default_clock_out,
+       default_break_minutes,
+       default_work_type,
        auth_version`,
   )
     .bind(...values);
@@ -458,6 +502,12 @@ auth.patch('/profile', authMiddleware, async (c) => {
     ...(body.default_clock_out !== undefined
       ? { default_clock_out: defaultClockOut ?? null }
       : {}),
+    ...(defaultBreakMinutes !== undefined
+      ? { default_break_minutes: defaultBreakMinutes }
+      : {}),
+    ...(defaultWorkType !== undefined
+      ? { default_work_type: defaultWorkType }
+      : {}),
   };
   const results = await c.env.DB.batch([
     update,
@@ -478,15 +528,11 @@ auth.post('/profile/password/verify', authMiddleware, async (c) => {
   assertOnlyKeys(body, ['current_password']);
   const currentPassword = credentialString(body.current_password, '当前密码', 128);
 
-  const [verifyAddressRate, verifyAccountRate] = await Promise.all([
-    c.env.AUTH_RATE_LIMITER.limit({
-      key: `password-verify-ip:${clientAddress(c.req.raw)}`,
-    }),
-    c.env.AUTH_RATE_LIMITER.limit({
-      key: `password-verify-account:${currentUser.id}`,
-    }),
+  const [verifyAddressAllowed, verifyAccountAllowed] = await Promise.all([
+    checkRateLimit(c.env.AUTH_RATE_LIMITER, `password-verify-ip:${clientAddress(c.req.raw)}`, c.req.raw),
+    checkRateLimit(c.env.AUTH_RATE_LIMITER, `password-verify-account:${currentUser.id}`, c.req.raw),
   ]);
-  if (!verifyAddressRate.success || !verifyAccountRate.success) {
+  if (!verifyAddressAllowed || !verifyAccountAllowed) {
     return c.json({ error: '尝试次数过多，请稍后再试' }, 429);
   }
 
@@ -581,6 +627,30 @@ function authAuditStatement(
 
 function clientAddress(request: Request): string {
   return request.headers.get('CF-Connecting-IP')?.slice(0, 64) || 'unknown';
+}
+
+async function checkRateLimit(
+  limiter: RateLimit | undefined,
+  key: string,
+  request?: Request,
+): Promise<boolean> {
+  const localPreview = request ? isLocalPreviewRequest(request) : false;
+  if (!limiter || typeof limiter.limit !== 'function') return localPreview;
+  try {
+    const result = await limiter.limit({ key });
+    return result.success;
+  } catch (error) {
+    console.error(JSON.stringify({
+      message: 'authentication rate limiter failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return localPreview;
+  }
+}
+
+function isLocalPreviewRequest(request: Request): boolean {
+  const hostname = new URL(request.url).hostname;
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
 export default auth;

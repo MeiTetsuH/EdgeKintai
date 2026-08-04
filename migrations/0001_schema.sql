@@ -32,6 +32,10 @@ CREATE TABLE users (
       AND CAST(substr(default_clock_out, 1, 2) AS INTEGER) <= 23
     )
   ),
+  default_break_minutes         INTEGER NOT NULL DEFAULT 60
+    CHECK (default_break_minutes BETWEEN 0 AND 480),
+  default_work_type             TEXT NOT NULL DEFAULT 'office'
+    CHECK (default_work_type IN ('office', 'remote')),
   auth_version                  INTEGER NOT NULL DEFAULT 1 CHECK (auth_version >= 1),
   created_at                    TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK (length(username) BETWEEN 3 AND 64),

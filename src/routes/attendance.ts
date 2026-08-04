@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { authMiddleware, type AuthEnv } from '../middleware/auth';
 import type { Attendance, TransportMode, TransportTripType, WorkType } from '../types';
-import { getPublicConfig, getUserCommuteDefaults } from '../utils/config';
+import { getUserAttendanceDefaults, getUserCommuteDefaults } from '../utils/config';
 import { buildHolidayMap, getHolidayData } from '../utils/holidays';
 import { buildMonthlySummary } from '../utils/summary';
 import { nowTimeJST, previousDate, timeToMinutes, todayJST } from '../utils/time';
@@ -40,8 +40,8 @@ attendance.get('/today', async (c) => {
     getHolidayData(c.env, Number(date.slice(0, 4))),
   ]);
   const holidayName = buildHolidayMap(holidayData.holidays).get(date) ?? null;
-  const defaults = getUserCommuteDefaults(c.env, user);
-  const publicConfig = getPublicConfig(c.env);
+  const commuteDefaults = getUserCommuteDefaults(c.env, user);
+  const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
   const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
 
   return c.json({
@@ -52,13 +52,14 @@ attendance.get('/today', async (c) => {
     is_weekend: dayOfWeek === 0 || dayOfWeek === 6,
     record: record ?? null,
     defaults: {
-      break_minutes: publicConfig.default_break_minutes,
-      one_way_fare: defaults.one_way_fare,
-      trip_type: defaults.trip_type,
-      transport_mode: defaults.transport_mode,
-      transport_origin: defaults.transport_origin,
-      transport_destination: defaults.transport_destination,
-      transport_fee: fareTotal(defaults.one_way_fare, defaults.trip_type),
+      break_minutes: attendanceDefaults.break_minutes,
+      work_type: attendanceDefaults.work_type,
+      one_way_fare: commuteDefaults.one_way_fare,
+      trip_type: commuteDefaults.trip_type,
+      transport_mode: commuteDefaults.transport_mode,
+      transport_origin: commuteDefaults.transport_origin,
+      transport_destination: commuteDefaults.transport_destination,
+      transport_fee: fareTotal(commuteDefaults.one_way_fare, commuteDefaults.trip_type),
     },
     holiday_data: {
       source: holidayData.source,
@@ -71,7 +72,8 @@ attendance.get('/today', async (c) => {
 attendance.post('/clock-in', async (c) => {
   const user = c.get('user');
   const body = await readJsonObject(c.req.raw);
-  const workType = workTypeValue(body.work_type, 'office');
+  const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
+  const workType = workTypeValue(body.work_type, attendanceDefaults.work_type);
   if (!isClockable(workType)) {
     throw new RequestValidationError('打刻只能选择出社或在宅勤務');
   }
@@ -80,14 +82,13 @@ attendance.post('/clock-in', async (c) => {
   const clockIn = nullableTime(body.clock_in, '出勤时刻') ?? nowTimeJST();
   if (!clockIn) throw new RequestValidationError('出勤时刻不能为空');
 
-  const config = getPublicConfig(c.env);
   const defaults = getUserCommuteDefaults(c.env, user);
   const breakMinutes = boundedInteger(
     body.break_minutes,
     '休息分钟',
     0,
     480,
-    config.default_break_minutes,
+    attendanceDefaults.break_minutes,
   );
   const requestedTripType = body.transport_trip_type === undefined
     ? undefined
@@ -227,9 +228,9 @@ attendance.put('/:date', async (c) => {
     .bind(user.id, date)
     .first<Attendance>();
 
-  const config = getPublicConfig(c.env);
+  const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
   const defaults = getUserCommuteDefaults(c.env, user);
-  const workType = workTypeValue(body.work_type, existing?.work_type ?? 'office');
+  const workType = workTypeValue(body.work_type, existing?.work_type ?? attendanceDefaults.work_type);
   let clockIn = nullableTime(body.clock_in, '出勤时刻');
   let clockOut = nullableTime(body.clock_out, '退勤时刻');
   let breakMinutes = boundedInteger(
@@ -237,7 +238,7 @@ attendance.put('/:date', async (c) => {
     '休息分钟',
     0,
     480,
-    existing?.break_minutes ?? config.default_break_minutes,
+    existing?.break_minutes ?? attendanceDefaults.break_minutes,
   );
   const memo = optionalString(body.memo, '备注', 500) ?? existing?.memo ?? '';
   const preserveExistingCommute = existing?.work_type === 'office';

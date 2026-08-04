@@ -75,6 +75,8 @@ describe('D1 final schema', () => {
       'default_transport_destination',
       'default_clock_in',
       'default_clock_out',
+      'default_break_minutes',
+      'default_work_type',
       'auth_version',
       'created_at',
     ]);

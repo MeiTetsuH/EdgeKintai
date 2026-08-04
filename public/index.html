@@ -114,26 +114,66 @@
 
       <main id="main-content" class="main-content" tabindex="-1">
         <section id="page-today" class="page is-active" data-page-panel="today" aria-labelledby="today-title">
-          <div class="page-heading">
-            <div>
+          <div class="today-hero-header">
+            <div class="today-hero-main">
               <p class="eyebrow">Today</p>
               <h1 id="today-title">今日の勤務</h1>
+              <div class="today-hero-date-group">
+                <span id="today-date" class="today-hero-date">----</span>
+                <span id="today-weekday" class="today-hero-weekday"></span>
+                <span id="today-holiday" class="holiday-label"></span>
+              </div>
             </div>
-            <div class="live-clock" aria-label="現在の日本時間">
-              <time id="current-time">--:--:--</time>
-              <span>JST</span>
+            <div class="today-hero-clock-box" aria-label="現在の日本時間">
+              <span class="live-clock-label">CURRENT TIME (JST)</span>
+              <div class="live-clock">
+                <time id="current-time">--:--:--</time>
+              </div>
             </div>
-          </div>
-
-          <div id="today-calendar-status" class="date-banner">
-            <div>
-              <strong id="today-date">----</strong>
-              <span id="today-weekday"></span>
-            </div>
-            <span id="today-holiday" class="holiday-label"></span>
           </div>
 
           <div class="dashboard-grid">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Clock in / out</p>
+                  <h2>打刻</h2>
+                </div>
+              </div>
+              <form id="clock-in-form" class="stack compact" novalidate>
+                <div class="button-row clock-action-row">
+                  <button id="clock-in-button" class="button button-primary button-action" type="submit">出勤</button>
+                  <button id="clock-out-button" class="button button-danger button-action" type="button">退勤</button>
+                </div>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="clock-work-type">勤務区分</label>
+                    <select id="clock-work-type" name="work_type">
+                      <option value="office">出社</option>
+                      <option value="remote">在宅</option>
+                      <option value="paid_leave">有給</option>
+                      <option value="holiday">休日</option>
+                      <option value="absent">欠勤</option>
+                    </select>
+                  </div>
+                  <div class="field" data-working-field>
+                    <label for="clock-in-time">打刻時刻</label>
+                    <div class="time-stepper-wrapper">
+                      <input id="clock-in-time" name="clock_in" type="time" step="60" class="time-input">
+                      <div class="time-stepper-btns">
+                        <button type="button" class="stepper-btn stepper-up" aria-label="15分進める" data-time-target="clock-in-time" data-step="15">▲</button>
+                        <button type="button" class="stepper-btn stepper-down" aria-label="15分戻す" data-time-target="clock-in-time" data-step="-15">▼</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="field" data-working-field>
+                  <label for="clock-break">休憩（分）</label>
+                  <input id="clock-break" name="break_minutes" type="number" inputmode="numeric" min="0" max="480" step="1">
+                </div>
+              </form>
+            </article>
+
             <article class="panel">
               <div class="panel-heading">
                 <div>
@@ -153,79 +193,8 @@
                 <div><dt>経路</dt><dd id="today-record-route" class="record-route-value">—</dd></div>
               </dl>
               <div class="button-row">
-                <button id="clock-out-button" class="button button-danger" type="button">退勤する</button>
-                <button id="edit-today-button" class="button" type="button">記録を修正</button>
+                <button id="edit-today-button" class="button button-wide" type="button">記録を修正</button>
               </div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Clock in</p>
-                  <h2>出勤を記録</h2>
-                </div>
-              </div>
-              <form id="clock-in-form" class="stack compact" novalidate>
-                <div class="field-grid">
-                  <div class="field">
-                    <label for="clock-work-type">勤務区分</label>
-                    <select id="clock-work-type" name="work_type">
-                      <option value="office">出社</option>
-                      <option value="remote">在宅</option>
-                      <option value="paid_leave">有給</option>
-                      <option value="holiday">休日</option>
-                      <option value="absent">欠勤</option>
-                    </select>
-                  </div>
-                  <div class="field" data-working-field>
-                    <label for="clock-in-time">出勤時刻</label>
-                    <input id="clock-in-time" name="clock_in" type="time" step="60">
-                  </div>
-                </div>
-                <div class="field-grid">
-                  <div class="field" data-working-field>
-                    <label for="clock-break">休憩（分）</label>
-                    <input id="clock-break" name="break_minutes" type="number" inputmode="numeric" min="0" max="480" step="1">
-                  </div>
-                  <div class="field" data-office-field>
-                    <label for="clock-one-way-fare">片道運賃（円）</label>
-                    <input id="clock-one-way-fare" name="transport_one_way_fee" type="number" inputmode="numeric" min="0" max="100000" step="1">
-                  </div>
-                </div>
-                <div class="field-grid">
-                  <div class="field" data-office-field>
-                    <label for="clock-transport-mode">交通手段</label>
-                    <select id="clock-transport-mode" name="transport_mode">
-                      <option value="rail">鉄道</option>
-                      <option value="bus">バス</option>
-                      <option value="taxi">タクシー</option>
-                      <option value="other">その他</option>
-                    </select>
-                  </div>
-                  <div class="field" data-office-field>
-                    <label for="clock-trip-type">交通区分</label>
-                    <select id="clock-trip-type" name="transport_trip_type">
-                      <option value="round_trip">往復</option>
-                      <option value="one_way">片道</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="field-grid">
-                  <div class="field" data-office-field>
-                    <label for="clock-transport-origin">出発地（駅・停留所など）</label>
-                    <input id="clock-transport-origin" name="transport_origin" type="text" maxlength="120">
-                  </div>
-                  <div class="field" data-office-field>
-                    <label for="clock-transport-destination">到着地（駅・停留所など）</label>
-                    <input id="clock-transport-destination" name="transport_destination" type="text" maxlength="120">
-                  </div>
-                </div>
-                <div class="fare-preview" data-office-field>
-                  <span>交通費合計</span>
-                  <strong id="clock-fare-preview">¥0</strong>
-                </div>
-                <button id="clock-in-button" class="button button-primary button-wide" type="submit">出勤する</button>
-              </form>
             </article>
           </div>
         </section>
@@ -304,67 +273,70 @@
           </div>
 
           <div class="settings-grid">
-            <section class="panel settings-profile-panel" aria-labelledby="profile-panel-title">
-              <div class="panel-heading"><h2 id="profile-panel-title">プロフィール</h2></div>
-              <div class="settings-profile-layout">
-                <form id="profile-form" class="settings-subsection stack compact" novalidate aria-labelledby="profile-details-title">
-                  <h3 id="profile-details-title">基本情報</h3>
-                  <div class="field">
-                    <label for="profile-username">ログイン名</label>
-                    <input id="profile-username" type="text" readonly aria-describedby="username-help">
-                    <small id="username-help">ログインに使用する識別子です。変更できません。</small>
-                  </div>
-                  <div class="field">
-                    <label for="profile-display-name">氏名（Excel表示名）</label>
-                    <input id="profile-display-name" type="text" autocomplete="name" maxlength="80" required aria-describedby="display-name-help">
-                    <small id="display-name-help">画面上の氏名と、Excel内およびファイル名に使用します。</small>
-                  </div>
-                  <div class="export-name-preview" aria-live="polite">
-                    <span>Excelファイル名</span>
-                    <output id="excel-filename-preview" for="profile-display-name">勤怠表_氏名_YYYYMM.xlsx</output>
-                  </div>
-                  <button class="button button-primary" type="submit">プロフィールを保存</button>
-                </form>
-
-                <form id="password-form" class="settings-subsection stack compact" novalidate aria-labelledby="password-form-title">
-                  <h3 id="password-form-title">パスワード変更</h3>
-                  <div class="field">
-                    <label for="current-password">現在のパスワード</label>
-                    <input id="current-password" type="password" autocomplete="current-password" maxlength="128" required>
-                  </div>
-                  <div class="field-grid">
-                    <div class="field">
-                      <label for="new-password">新しいパスワード</label>
-                      <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
-                    </div>
-                    <div class="field">
-                      <label for="new-password-confirm">新しいパスワード（確認）</label>
-                      <input id="new-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
-                    </div>
-                  </div>
-                  <button class="button" type="submit">パスワードを変更</button>
-                </form>
-              </div>
+            <section class="panel settings-card" aria-labelledby="profile-details-title">
+              <div class="panel-heading"><h2 id="profile-details-title">基本情報</h2></div>
+              <form id="profile-form" class="stack compact" novalidate>
+                <div class="field">
+                  <label for="profile-username">ログイン名</label>
+                  <input id="profile-username" type="text" readonly aria-describedby="username-help">
+                  <small id="username-help">ログインに使用する識別子です。変更できません。</small>
+                </div>
+                <div class="field">
+                  <label for="profile-display-name">氏名（Excel表示名）</label>
+                  <input id="profile-display-name" type="text" autocomplete="name" maxlength="80" required aria-describedby="display-name-help">
+                  <small id="display-name-help">画面上の氏名と、Excel内およびファイル名に使用します。</small>
+                </div>
+                <div class="export-name-preview" aria-live="polite">
+                  <span>Excelファイル名</span>
+                  <output id="excel-filename-preview" for="profile-display-name">勤怠表_氏名_YYYYMM.xlsx</output>
+                </div>
+                <button class="button button-primary" type="submit">プロフィールを保存</button>
+              </form>
             </section>
 
-            <section class="panel" aria-labelledby="work-defaults-title">
+            <section class="panel settings-card" aria-labelledby="work-defaults-title">
               <div class="panel-heading"><h2 id="work-defaults-title">勤務の既定値</h2></div>
               <form id="work-defaults-form" class="stack compact" novalidate>
                 <div class="field-grid">
                   <div class="field">
                     <label for="profile-clock-in">既定の出勤時刻</label>
-                    <input id="profile-clock-in" type="time" step="60">
+                    <div class="time-stepper-wrapper">
+                      <input id="profile-clock-in" type="time" step="60" class="time-input">
+                      <div class="time-stepper-btns">
+                        <button type="button" class="stepper-btn stepper-up" aria-label="15分進める" data-time-target="profile-clock-in" data-step="15">▲</button>
+                        <button type="button" class="stepper-btn stepper-down" aria-label="15分戻す" data-time-target="profile-clock-in" data-step="-15">▼</button>
+                      </div>
+                    </div>
                   </div>
                   <div class="field">
                     <label for="profile-clock-out">既定の退勤時刻</label>
-                    <input id="profile-clock-out" type="time" step="60">
+                    <div class="time-stepper-wrapper">
+                      <input id="profile-clock-out" type="time" step="60" class="time-input">
+                      <div class="time-stepper-btns">
+                        <button type="button" class="stepper-btn stepper-up" aria-label="15分進める" data-time-target="profile-clock-out" data-step="15">▲</button>
+                        <button type="button" class="stepper-btn stepper-down" aria-label="15分戻す" data-time-target="profile-clock-out" data-step="-15">▼</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="profile-break">既定の休憩時間（分）</label>
+                    <input id="profile-break" type="number" inputmode="numeric" min="0" max="480" step="1" required>
+                  </div>
+                  <div class="field">
+                    <label for="profile-work-type">既定の勤務区分</label>
+                    <select id="profile-work-type" required>
+                      <option value="office">出社</option>
+                      <option value="remote">在宅</option>
+                    </select>
                   </div>
                 </div>
                 <button class="button button-primary" type="submit">勤務設定を保存</button>
               </form>
             </section>
 
-            <section class="panel" aria-labelledby="commute-settings-title">
+            <section class="panel settings-card" aria-labelledby="commute-settings-title">
               <div class="panel-heading"><h2 id="commute-settings-title">通勤設定</h2></div>
               <form id="commute-form" class="stack compact" novalidate>
                 <div class="field-grid">
@@ -395,11 +367,31 @@
                 <div class="field">
                   <label for="profile-trip-type">既定の交通区分</label>
                   <select id="profile-trip-type">
+                    <option value="">未選択</option>
                     <option value="round_trip">往復</option>
                     <option value="one_way">片道</option>
                   </select>
                 </div>
                 <button class="button button-primary" type="submit">通勤設定を保存</button>
+              </form>
+            </section>
+
+            <section class="panel settings-card" aria-labelledby="password-form-title">
+              <div class="panel-heading"><h2 id="password-form-title">パスワード変更</h2></div>
+              <form id="password-form" class="stack compact" novalidate>
+                <div class="field">
+                  <label for="current-password">現在のパスワード</label>
+                  <input id="current-password" type="password" autocomplete="current-password" maxlength="128" required>
+                </div>
+                <div class="field">
+                  <label for="new-password">新しいパスワード</label>
+                  <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                </div>
+                <div class="field">
+                  <label for="new-password-confirm">新しいパスワード（確認）</label>
+                  <input id="new-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                </div>
+                <button class="button" type="submit">パスワードを変更</button>
               </form>
             </section>
           </div>
@@ -491,8 +483,26 @@
           </div>
         </div>
         <div class="field-grid" data-record-working-field>
-          <div class="field"><label for="record-clock-in">出勤</label><input id="record-clock-in" type="time" step="60"></div>
-          <div class="field"><label for="record-clock-out">退勤</label><input id="record-clock-out" type="time" step="60"></div>
+          <div class="field">
+            <label for="record-clock-in">出勤</label>
+            <div class="time-stepper-wrapper">
+              <input id="record-clock-in" type="time" step="60" class="time-input">
+              <div class="time-stepper-btns">
+                <button type="button" class="stepper-btn stepper-up" aria-label="15分進める" data-time-target="record-clock-in" data-step="15">▲</button>
+                <button type="button" class="stepper-btn stepper-down" aria-label="15分戻す" data-time-target="record-clock-in" data-step="-15">▼</button>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="record-clock-out">退勤</label>
+            <div class="time-stepper-wrapper">
+              <input id="record-clock-out" type="time" step="60" class="time-input">
+              <div class="time-stepper-btns">
+                <button type="button" class="stepper-btn stepper-up" aria-label="15分進める" data-time-target="record-clock-out" data-step="15">▲</button>
+                <button type="button" class="stepper-btn stepper-down" aria-label="15分戻す" data-time-target="record-clock-out" data-step="-15">▼</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="field-grid">
           <div class="field" data-record-office-field><label for="record-one-way-fare">片道運賃（円）</label><input id="record-one-way-fare" type="number" min="0" max="100000" step="1"></div>
@@ -519,7 +529,11 @@
         <div class="field-grid">
           <div class="field" data-record-office-field>
             <label for="record-trip-type">交通区分</label>
-            <select id="record-trip-type"><option value="round_trip">往復</option><option value="one_way">片道</option></select>
+            <select id="record-trip-type">
+              <option value="">未選択</option>
+              <option value="round_trip">往復</option>
+              <option value="one_way">片道</option>
+            </select>
           </div>
           <div class="fare-preview" data-record-office-field><span>交通費合計</span><strong id="record-fare-preview">¥0</strong></div>
         </div>

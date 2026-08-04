@@ -128,6 +128,15 @@ export function workTypeValue(value: unknown, fallback?: WorkType): WorkType {
   throw new RequestValidationError('勤務区分不正确');
 }
 
+export function defaultWorkTypeValue(
+  value: unknown,
+  fallback?: 'office' | 'remote',
+): 'office' | 'remote' {
+  const workType = workTypeValue(value, fallback);
+  if (workType === 'office' || workType === 'remote') return workType;
+  throw new RequestValidationError('既定の勤務区分は出社または在宅を選択してください');
+}
+
 export function tripTypeValue(value: unknown, fallback?: TransportTripType): TransportTripType {
   if (value === undefined && fallback) return fallback;
   if (value === 'one_way' || value === 'round_trip') return value;
