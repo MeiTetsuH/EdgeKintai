@@ -113,6 +113,10 @@ describe('D1 final schema', () => {
       'work_date',
       'user_id',
     ]);
+    expect(await indexColumns('sqlite_autoindex_attendance_1')).toEqual([
+      'user_id',
+      'work_date',
+    ]);
 
     const foreignKeyCheck = await env.DB.prepare('PRAGMA foreign_key_check').all();
     expect(foreignKeyCheck.results).toEqual([]);

@@ -1,9 +1,14 @@
 import { readFile } from 'node:fs/promises';
+import { Script } from 'node:vm';
 
 const [app, html] = await Promise.all([
   readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
   readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
 ]);
+
+// Parse the complete browser bundle so a missing bracket cannot ship behind
+// the lightweight DOM-id contract checks below.
+new Script(app, { filename: 'public/app.js' });
 const referencedIds = new Set(
   [...app.matchAll(/byId\(['"]([^'"]+)['"]\)/g)].map((match) => match[1]),
 );

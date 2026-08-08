@@ -47,7 +47,7 @@
     }
   ],
 
-  // Monday 03:00 JST (Sunday 18:00 UTC): refresh the official holiday cache.
+  // Cloudflare uses 1=Sunday (not Monday). Sunday 18:00 UTC is Monday 03:00 JST.
   "triggers": {
     "crons": ["0 18 * * 1"]
   },

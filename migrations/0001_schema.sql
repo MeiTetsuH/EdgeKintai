@@ -148,6 +148,8 @@ CREATE TABLE sessions (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- UNIQUE (user_id, work_date) already creates the user-first B-tree. This
+-- complementary date-first index serves administrator month-range scans.
 CREATE INDEX idx_attendance_date_user ON attendance(work_date, user_id);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX idx_sessions_user ON sessions(user_id);

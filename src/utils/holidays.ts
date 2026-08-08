@@ -40,51 +40,88 @@ type HolidayCacheRow = Holiday & {
   synced_at: string | null;
 };
 
-/**
- * Cabinet Office-published fallback data. These values deliberately include
- * substitute holidays and the statutory day between two national holidays.
- */
-const BUNDLED_OFFICIAL_HOLIDAYS: Readonly<Record<number, readonly Holiday[]>> = {
-  2026: [
-    { date_str: '2026-01-01', name_ja: '元日' },
-    { date_str: '2026-01-12', name_ja: '成人の日' },
-    { date_str: '2026-02-11', name_ja: '建国記念の日' },
-    { date_str: '2026-02-23', name_ja: '天皇誕生日' },
-    { date_str: '2026-03-20', name_ja: '春分の日' },
-    { date_str: '2026-04-29', name_ja: '昭和の日' },
-    { date_str: '2026-05-03', name_ja: '憲法記念日' },
-    { date_str: '2026-05-04', name_ja: 'みどりの日' },
-    { date_str: '2026-05-05', name_ja: 'こどもの日' },
-    { date_str: '2026-05-06', name_ja: '休日' },
-    { date_str: '2026-07-20', name_ja: '海の日' },
-    { date_str: '2026-08-11', name_ja: '山の日' },
-    { date_str: '2026-09-21', name_ja: '敬老の日' },
-    { date_str: '2026-09-22', name_ja: '休日' },
-    { date_str: '2026-09-23', name_ja: '秋分の日' },
-    { date_str: '2026-10-12', name_ja: 'スポーツの日' },
-    { date_str: '2026-11-03', name_ja: '文化の日' },
-    { date_str: '2026-11-23', name_ja: '勤労感謝の日' },
-  ],
-  2027: [
-    { date_str: '2027-01-01', name_ja: '元日' },
-    { date_str: '2027-01-11', name_ja: '成人の日' },
-    { date_str: '2027-02-11', name_ja: '建国記念の日' },
-    { date_str: '2027-02-23', name_ja: '天皇誕生日' },
-    { date_str: '2027-03-21', name_ja: '春分の日' },
-    { date_str: '2027-03-22', name_ja: '休日' },
-    { date_str: '2027-04-29', name_ja: '昭和の日' },
-    { date_str: '2027-05-03', name_ja: '憲法記念日' },
-    { date_str: '2027-05-04', name_ja: 'みどりの日' },
-    { date_str: '2027-05-05', name_ja: 'こどもの日' },
-    { date_str: '2027-07-19', name_ja: '海の日' },
-    { date_str: '2027-08-11', name_ja: '山の日' },
-    { date_str: '2027-09-20', name_ja: '敬老の日' },
-    { date_str: '2027-09-23', name_ja: '秋分の日' },
-    { date_str: '2027-10-11', name_ja: 'スポーツの日' },
-    { date_str: '2027-11-03', name_ja: '文化の日' },
-    { date_str: '2027-11-23', name_ja: '勤労感謝の日' },
-  ],
-};
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+function formatUtcDate(d: Date): string {
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function generateRuleBasedHolidays(year: number): Holiday[] {
+  // 1980-2099 eq calculation formulas
+  const getAutumnal = (y: number) => Math.floor(23.2488 + 0.242194 * (y - 1980) - Math.floor((y - 1980) / 4));
+  const getVernal = (y: number) => Math.floor(20.8431 + 0.242194 * (y - 1980) - Math.floor((y - 1980) / 4));
+  const getNthDay = (y: number, m: number, nth: number, dow: number) => {
+    const first = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+    return 1 + (dow - first + 7) % 7 + (nth - 1) * 7;
+  };
+  const fmt = (m: number, d: number) => `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+  const bases: { d: string; n: string }[] = [
+    { d: fmt(1, 1), n: '元日' },
+    { d: fmt(1, getNthDay(year, 1, 2, 1)), n: '成人の日' },
+    { d: fmt(2, 11), n: '建国記念の日' },
+    { d: fmt(2, 23), n: '天皇誕生日' },
+    { d: fmt(3, getVernal(year)), n: '春分の日' },
+    { d: fmt(4, 29), n: '昭和の日' },
+    { d: fmt(5, 3), n: '憲法記念日' },
+    { d: fmt(5, 4), n: 'みどりの日' },
+    { d: fmt(5, 5), n: 'こどもの日' },
+    { d: fmt(7, getNthDay(year, 7, 3, 1)), n: '海の日' },
+    { d: fmt(8, 11), n: '山の日' },
+    { d: fmt(9, getNthDay(year, 9, 3, 1)), n: '敬老の日' },
+    { d: fmt(9, getAutumnal(year)), n: '秋分の日' },
+    { d: fmt(10, getNthDay(year, 10, 2, 1)), n: 'スポーツの日' },
+    { d: fmt(11, 3), n: '文化の日' },
+    { d: fmt(11, 23), n: '勤労感謝の日' }
+  ].sort((a, b) => a.d.localeCompare(b.d));
+
+  const holidaySet = new Set(bases.map((holiday) => holiday.d));
+
+  // Citizens' Holiday (国民の休日)
+  const citizenHolidays: { d: string; n: string }[] = [];
+  for (let i = 0; i < bases.length - 1; i++) {
+    const t1 = new Date(`${bases[i].d}T00:00:00Z`).getTime();
+    const t2 = new Date(`${bases[i + 1].d}T00:00:00Z`).getTime();
+
+    if (t2 - t1 === 2 * ONE_DAY_MS) {
+      const mid = new Date(t1 + ONE_DAY_MS);
+      if (mid.getUTCDay() !== 0) {
+        const midStr = formatUtcDate(mid);
+        if (!holidaySet.has(midStr)) {
+          holidaySet.add(midStr);
+          citizenHolidays.push({ d: midStr, n: '休日' });
+        }
+      }
+    }
+  }
+
+  bases.push(...citizenHolidays);
+  bases.sort((a, b) => a.d.localeCompare(b.d));
+
+  // Substitute Holiday (振替休日)
+  const finalHolidays = [...bases];
+  for (const h of bases) {
+    const d = new Date(`${h.d}T00:00:00Z`);
+    if (d.getUTCDay() === 0) {
+      const sub = new Date(d.getTime());
+      while (true) {
+        sub.setUTCDate(sub.getUTCDate() + 1);
+        const subStr = formatUtcDate(sub);
+        if (!holidaySet.has(subStr)) {
+          holidaySet.add(subStr);
+          finalHolidays.push({ d: subStr, n: '休日' });
+          break;
+        }
+      }
+    }
+  }
+
+  finalHolidays.sort((a, b) => a.d.localeCompare(b.d));
+  return finalHolidays.map(h => ({ date_str: h.d, name_ja: h.n }));
+}
 
 function cloneHolidays(holidays: readonly Holiday[]): Holiday[] {
   return holidays.map((holiday) => ({ ...holiday }));
@@ -245,14 +282,14 @@ function unavailableHolidayData(year: number): HolidayData {
   };
 }
 
-function bundledHolidayData(year: number): HolidayData | null {
-  const fallback = BUNDLED_OFFICIAL_HOLIDAYS[year];
-  if (!fallback) return null;
+function ruleBasedHolidayData(year: number): HolidayData | null {
+  if (year < 2016) return null; // Mountain day established 2016
+  const fallback = generateRuleBasedHolidays(year);
   return {
     year,
     holidays: cloneHolidays(fallback),
-    source: 'bundled-official',
-    complete: true,
+    source: 'rule-based',
+    complete: false,
     synced_at: null,
   };
 }
@@ -350,12 +387,12 @@ export async function getHolidayData(
         synced_at: state.synced_at,
       };
     } catch {
-      // Do not expose a malformed cache. The bundled fallback below remains
-      // available for the two years that were manually verified from CAO data.
+      // Do not expose a malformed cache. The explicitly incomplete rule-based
+      // fallback below remains available as a last resort.
     }
   }
 
-  return bundledHolidayData(year) ?? unavailableHolidayData(year);
+  return ruleBasedHolidayData(year) ?? unavailableHolidayData(year);
 }
 
 /**

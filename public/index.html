@@ -67,19 +67,6 @@
               <input id="setup-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
             </div>
           </div>
-          <div class="field-grid">
-            <div class="field">
-              <label for="setup-fare">既定の片道運賃（円）</label>
-              <input id="setup-fare" name="default_one_way_fare" type="number" inputmode="numeric" min="0" max="100000" step="1">
-            </div>
-            <div class="field">
-              <label for="setup-trip-type">既定の交通区分</label>
-              <select id="setup-trip-type" name="default_trip_type">
-                <option value="round_trip">往復</option>
-                <option value="one_way">片道</option>
-              </select>
-            </div>
-          </div>
           <button class="button button-primary button-wide" type="submit">管理者を作成して開始</button>
         </form>
       </section>
@@ -215,6 +202,7 @@
             <div id="calendar-grid" class="calendar-grid" aria-label="月間勤務カレンダー"></div>
           </div>
           <p class="hint">日付を選ぶと、その日の勤務を補録・修正できます。</p>
+          <p id="calendar-holiday-source-note" class="hint" data-incomplete="false"></p>
         </section>
 
         <section id="page-summary" class="page" data-page-panel="summary" aria-labelledby="summary-title" hidden>
@@ -418,12 +406,8 @@
                   <div class="field"><label for="admin-new-username">ログイン名</label><input id="admin-new-username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" required></div>
                   <div class="field"><label for="admin-new-name">氏名</label><input id="admin-new-name" type="text" maxlength="80" required></div>
                 </div>
-                <div class="field-grid">
-                  <div class="field"><label for="admin-new-password">初期パスワード</label><input id="admin-new-password" type="password" minlength="12" maxlength="128" required></div>
-                  <div class="field"><label for="admin-new-fare">片道運賃（円）</label><input id="admin-new-fare" type="number" min="0" max="100000" step="1"></div>
-                </div>
+                <div class="field"><label for="admin-new-password">初期パスワード</label><input id="admin-new-password" type="password" minlength="12" maxlength="128" required></div>
                 <div class="inline-options">
-                  <label><input id="admin-new-round-trip" type="checkbox" checked> 既定は往復</label>
                   <label><input id="admin-new-is-admin" type="checkbox"> 管理者として作成</label>
                 </div>
                 <button class="button button-primary" type="submit">ユーザーを追加</button>

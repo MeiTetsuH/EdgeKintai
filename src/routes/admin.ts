@@ -9,6 +9,7 @@ import { hashPassword } from '../utils/password';
 import { buildMonthlySummaryFromRecords } from '../utils/summary';
 import { monthStart, nextMonthStart } from '../utils/time';
 import {
+  assertOnlyKeys,
   displayNameValue,
   boundedInteger,
   defaultWorkTypeValue,
@@ -45,6 +46,12 @@ admin.get('/users', async (c) => {
 admin.post('/users', async (c) => {
   const actor = c.get('user');
   const body = await readJsonObject(c.req.raw);
+  assertOnlyKeys(body, [
+    'username', 'display_name', 'password', 'is_admin',
+    'default_one_way_fare', 'default_trip_type',
+    'default_transport_mode', 'default_transport_origin', 'default_transport_destination',
+    'default_clock_in', 'default_clock_out', 'default_break_minutes', 'default_work_type',
+  ]);
   const username = usernameValue(body.username);
   const displayName = body.display_name === undefined
     ? username
@@ -53,19 +60,19 @@ admin.post('/users', async (c) => {
   const isAdmin = adminFlagValue(body.is_admin, 0);
   const defaultFare = nullableBoundedInteger(
     body.default_one_way_fare,
-    '默认片道交通费',
+    'デフォルト片道交通費',
     0,
     100_000,
   ) ?? null;
   const defaultTripType = tripTypeValue(body.default_trip_type, 'round_trip');
   const defaultTransportMode = transportModeValue(body.default_transport_mode, 'rail');
-  const defaultTransportOrigin = optionalString(body.default_transport_origin, '出发地', 120) ?? '';
-  const defaultTransportDestination = optionalString(body.default_transport_destination, '到达地', 120) ?? '';
-  const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
-  const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
+  const defaultTransportOrigin = optionalString(body.default_transport_origin, '出発地', 120) ?? '';
+  const defaultTransportDestination = optionalString(body.default_transport_destination, '到着地', 120) ?? '';
+  const defaultClockIn = nullableTime(body.default_clock_in, 'デフォルト出勤時間') ?? null;
+  const defaultClockOut = nullableTime(body.default_clock_out, 'デフォルト退勤時間') ?? null;
   const defaultBreakMinutes = boundedInteger(
     body.default_break_minutes,
-    '默认休息分钟',
+    'デフォルト休憩（分）',
     0,
     480,
     getPublicConfig(c.env).default_break_minutes,
@@ -130,7 +137,7 @@ admin.post('/users', async (c) => {
     user = results[0]?.results?.[0] as ManagedUser | undefined;
   } catch (error) {
     if (String(error).includes('UNIQUE')) {
-      return c.json({ error: '该登录名已被使用' }, 409);
+      return c.json({ error: 'このログインIDは既に使用されています' }, 409);
     }
     throw error;
   }
@@ -143,8 +150,14 @@ admin.patch('/users/:id', async (c) => {
   const actor = c.get('user');
   const targetId = positiveIdValue(c.req.param('id'));
   const body = await readJsonObject(c.req.raw);
+  assertOnlyKeys(body, [
+    'display_name', 'is_admin',
+    'default_one_way_fare', 'default_trip_type',
+    'default_transport_mode', 'default_transport_origin', 'default_transport_destination',
+    'default_clock_in', 'default_clock_out', 'default_break_minutes', 'default_work_type',
+  ]);
   const existing = await getUser(c.env, targetId);
-  if (!existing) return c.json({ error: '用户不存在' }, 404);
+  if (!existing) return c.json({ error: 'ユーザーが存在しません' }, 404);
 
   const displayName = body.display_name === undefined
     ? existing.display_name
@@ -152,7 +165,7 @@ admin.patch('/users/:id', async (c) => {
   const isAdmin = adminFlagValue(body.is_admin, existing.is_admin);
   const defaultFare = body.default_one_way_fare === undefined
     ? existing.default_one_way_fare
-    : nullableBoundedInteger(body.default_one_way_fare, '默认片道交通费', 0, 100_000) ?? null;
+    : nullableBoundedInteger(body.default_one_way_fare, 'デフォルト片道交通費', 0, 100_000) ?? null;
   const defaultTripType = tripTypeValue(body.default_trip_type, existing.default_trip_type);
   const defaultTransportMode = transportModeValue(
     body.default_transport_mode,
@@ -160,19 +173,19 @@ admin.patch('/users/:id', async (c) => {
   );
   const defaultTransportOrigin = body.default_transport_origin === undefined
     ? existing.default_transport_origin
-    : optionalString(body.default_transport_origin, '出发地', 120) ?? '';
+    : optionalString(body.default_transport_origin, '出発地', 120) ?? '';
   const defaultTransportDestination = body.default_transport_destination === undefined
     ? existing.default_transport_destination
-    : optionalString(body.default_transport_destination, '到达地', 120) ?? '';
+    : optionalString(body.default_transport_destination, '到着地', 120) ?? '';
   const defaultClockIn = body.default_clock_in === undefined
     ? existing.default_clock_in
-    : nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
+    : nullableTime(body.default_clock_in, 'デフォルト出勤時間') ?? null;
   const defaultClockOut = body.default_clock_out === undefined
     ? existing.default_clock_out
-    : nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
+    : nullableTime(body.default_clock_out, 'デフォルト退勤時間') ?? null;
   const defaultBreakMinutes = body.default_break_minutes === undefined
     ? existing.default_break_minutes
-    : boundedInteger(body.default_break_minutes, '默认休息分钟', 0, 480);
+    : boundedInteger(body.default_break_minutes, 'デフォルト休憩（分）', 0, 480);
   const defaultWorkType = body.default_work_type === undefined
     ? existing.default_work_type
     : defaultWorkTypeValue(body.default_work_type);
@@ -181,7 +194,7 @@ admin.patch('/users/:id', async (c) => {
     const otherAdmin = await c.env.DB.prepare(
       'SELECT id FROM users WHERE is_admin = 1 AND id != ? LIMIT 1',
     ).bind(targetId).first();
-    if (!otherAdmin) return c.json({ error: '不能取消最后一名管理员的权限' }, 409);
+    if (!otherAdmin) return c.json({ error: '最後の管理者の権限を外すことはできません' }, 409);
   }
 
   const update = c.env.DB.prepare(
@@ -243,11 +256,14 @@ admin.patch('/users/:id', async (c) => {
     ]);
   } catch (error) {
     if (String(error).includes('cannot remove last administrator')) {
-      return c.json({ error: '不能取消最后一名管理员的权限' }, 409);
+      return c.json({ error: '最後の管理者の権限を外すことはできません' }, 409);
     }
     throw error;
   }
   const user = results[0]?.results?.[0] as ManagedUser | undefined;
+  if (!user) {
+    return c.json({ error: 'ユーザーの更新中にエラーが発生しました（既に削除された可能性があります）' }, 404);
+  }
   return c.json({ success: true, user });
 });
 
@@ -255,9 +271,10 @@ admin.post('/users/:id/password', async (c) => {
   const actor = c.get('user');
   const targetId = positiveIdValue(c.req.param('id'));
   const body = await readJsonObject(c.req.raw);
-  const newPassword = passwordValue(body.new_password, '新密码');
+  assertOnlyKeys(body, ['new_password']);
+  const newPassword = passwordValue(body.new_password, '新しいパスワード');
   const target = await getUser(c.env, targetId);
-  if (!target) return c.json({ error: '用户不存在' }, 404);
+  if (!target) return c.json({ error: 'ユーザーが存在しません' }, 404);
   const passwordHash = await hashPassword(newPassword);
 
   await c.env.DB.batch([
@@ -273,9 +290,9 @@ admin.post('/users/:id/password', async (c) => {
 admin.delete('/users/:id', async (c) => {
   const actor = c.get('user');
   const targetId = positiveIdValue(c.req.param('id'));
-  if (targetId === actor.id) return c.json({ error: '不能删除自己' }, 400);
+  if (targetId === actor.id) return c.json({ error: '自分自身を削除することはできません' }, 400);
   const target = await getUser(c.env, targetId);
-  if (!target) return c.json({ error: '用户不存在' }, 404);
+  if (!target) return c.json({ error: 'ユーザーが存在しません' }, 404);
 
   try {
     await c.env.DB.batch([
@@ -284,7 +301,7 @@ admin.delete('/users/:id', async (c) => {
     ]);
   } catch (error) {
     if (String(error).includes('cannot delete last administrator')) {
-      return c.json({ error: '不能删除最后一名管理员' }, 409);
+      return c.json({ error: '最後の管理者を削除することはできません' }, 409);
     }
     throw error;
   }
@@ -318,6 +335,7 @@ admin.get('/overview/:year/:month', async (c) => {
     recordsByUser.set(record.user_id, records);
   }
 
+  const config = getPublicConfig(c.env);
   const users = usersResult.results.map((user) => ({
     user_id: user.id,
     username: user.username,
@@ -329,6 +347,7 @@ admin.get('/overview/:year/:month', async (c) => {
       month,
       recordsByUser.get(user.id) ?? [],
       holidayData,
+      { cachedConfig: config },
     ),
   }));
 
@@ -339,7 +358,7 @@ function adminFlagValue(value: unknown, fallback: number): 0 | 1 {
   if (value === undefined) return fallback === 1 ? 1 : 0;
   if (value === true || value === 1) return 1;
   if (value === false || value === 0) return 0;
-  throw new RequestValidationError('管理员权限值不正确');
+  throw new RequestValidationError('管理者権限の値が正しくありません');
 }
 
 async function getUser(env: CloudflareBindings, id: number): Promise<ManagedUser | null> {

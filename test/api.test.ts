@@ -308,11 +308,30 @@ describe('EdgeKintai API', () => {
       ]),
     });
 
-    const invalid = await jsonRequest('/api/attendance/2026-02-31', 'PUT', {
+    const invalidDate = await jsonRequest('/api/attendance/2026-02-31', 'PUT', {
       work_type: 'office',
       clock_in: '00:99',
     }, cookie);
-    expect(invalid.status).toBe(400);
+    expect(invalidDate.status).toBe(400);
+
+    const invalidClockIn = await jsonRequest('/api/attendance/2026-07-03', 'PUT', {
+      work_type: 'office',
+      clock_in: '99:00',
+    }, cookie);
+    expect(invalidClockIn.status).toBe(400);
+
+    const invalidClockOut = await jsonRequest('/api/attendance/2026-07-03', 'PUT', {
+      work_type: 'office',
+      clock_in: '09:00',
+      clock_out: '23:60',
+    }, cookie);
+    expect(invalidClockOut.status).toBe(400);
+
+    const unsupportedField = await jsonRequest('/api/attendance/2026-07-03', 'PUT', {
+      work_type: 'office',
+      unexpected: true,
+    }, cookie);
+    expect(unsupportedField.status).toBe(400);
   });
 
   it('snapshots commute routes and preserves history when profile defaults change', async () => {
@@ -554,14 +573,14 @@ describe('EdgeKintai API', () => {
     );
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
-      const response = await SELF.fetch(`${origin}/api/export/2028/1`, {
+      const response = await SELF.fetch(`${origin}/api/export/2015/1`, {
         headers: { Cookie: cookie },
       });
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({
-        error: expect.stringContaining('2028'),
+        error: expect.stringContaining('2015'),
       });
-      const cachedFailure = await SELF.fetch(`${origin}/api/export/2028/1`, {
+      const cachedFailure = await SELF.fetch(`${origin}/api/export/2015/1`, {
         headers: { Cookie: cookie },
       });
       expect(cachedFailure.status).toBe(503);
