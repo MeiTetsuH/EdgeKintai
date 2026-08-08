@@ -3,6 +3,7 @@ import type {
   AttendanceWithDay,
   HolidayData,
   MonthlySummary,
+  PublicAppConfig,
   User,
 } from '../types';
 import { getPublicConfig, getUserCommuteDefaults } from './config';
@@ -32,6 +33,7 @@ type SummaryUser = Pick<
 export interface MonthlySummaryBuildOptions {
   /** Controls which missing scheduled days count as incomplete. Defaults to today in JST. */
   as_of_date?: string;
+  cachedConfig?: PublicAppConfig;
 }
 
 function assertValidMonth(year: number, month: number): void {
@@ -93,8 +95,8 @@ export function buildMonthlySummaryFromRecords(
     throw new RangeError('Holiday data year does not match summary year');
   }
 
-  const config = getPublicConfig(env);
-  const commuteDefaults = getUserCommuteDefaults(env, user);
+  const config = options.cachedConfig ?? getPublicConfig(env);
+  const commuteDefaults = getUserCommuteDefaults(env, user, config);
   const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
   const recordMap = new Map<string, Attendance>();
   for (const record of records) {

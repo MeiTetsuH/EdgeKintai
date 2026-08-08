@@ -3,6 +3,7 @@ import type { TransportMode, TransportTripType, User } from '../types';
 import { stringifyAuditJson } from '../utils/audit';
 import { getPublicConfig } from '../utils/config';
 import { hashPassword, verifyPassword, verifySecret } from '../utils/password';
+import { checkRateLimit } from '../utils/rate-limit';
 import {
   authMiddleware,
   clearSessionCookie,
@@ -15,6 +16,7 @@ import {
   setSessionCookie,
 } from '../middleware/auth';
 import {
+  assertOnlyKeys,
   boundedInteger,
   defaultWorkTypeValue,
   displayNameValue,
@@ -79,25 +81,19 @@ function toPublicUser(user: User): PublicUser {
   };
 }
 
-function assertOnlyKeys(body: Record<string, unknown>, allowed: readonly string[]): void {
-  const allowedKeys = new Set(allowed);
-  if (Object.keys(body).some((key) => !allowedKeys.has(key))) {
-    throw new RequestValidationError('请求中包含不支持的字段');
-  }
-}
 
 function loginIdentifier(value: unknown, label: string, maxLength: number): string {
-  if (typeof value !== 'string') throw new RequestValidationError(`${label}不能为空`);
+  if (typeof value !== 'string') throw new RequestValidationError(`${label}は必須です`);
   const normalized = value.normalize('NFKC').trim();
   if (normalized.length < 1 || normalized.length > maxLength) {
-    throw new RequestValidationError(`${label}格式不正确`);
+    throw new RequestValidationError(`${label}の形式が正しくありません`);
   }
   return normalized;
 }
 
 function credentialString(value: unknown, label: string, maxLength: number): string {
   if (typeof value !== 'string' || value.length < 1 || value.length > maxLength) {
-    throw new RequestValidationError(`${label}格式不正确`);
+    throw new RequestValidationError(`${label}の形式が正しくありません`);
   }
   return value;
 }
@@ -105,7 +101,7 @@ function credentialString(value: unknown, label: string, maxLength: number): str
 function optionalFare(value: unknown): number | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  return boundedInteger(value, '默认片道交通费', 0, 100_000);
+  return boundedInteger(value, 'デフォルト片道交通費', 0, 100_000);
 }
 
 function optionalTripType(value: unknown): TransportTripType | undefined {
@@ -159,7 +155,7 @@ auth.post('/setup', async (c) => {
     `setup:${clientAddress(c.req.raw)}`,
     c.req.raw,
   );
-  if (!setupAllowed) return c.json({ error: '尝试次数过多，请稍后再试' }, 429);
+  if (!setupAllowed) return c.json({ error: '試行回数が多すぎます。しばらくしてからもう一度お試しください' }, 429);
 
   const providedSetupToken = typeof body.setup_token === 'string' ? body.setup_token : '';
   const expectedSetupToken = c.env.SETUP_TOKEN;
@@ -168,26 +164,26 @@ auth.post('/setup', async (c) => {
     || expectedSetupToken.length < 32
     || SETUP_TOKEN_PLACEHOLDERS.has(expectedSetupToken)
   ) {
-    return c.json({ error: '初期设置当前不可用' }, 503);
+    return c.json({ error: '初期設定は現在利用できません' }, 503);
   }
   if (!providedSetupToken || !(await verifySecret(providedSetupToken, expectedSetupToken))) {
-    return c.json({ error: '初期设置凭据不正确' }, 403);
+    return c.json({ error: '初期設定の認証情報が正しくありません' }, 403);
   }
 
   const username = usernameValue(body.username);
   const password = passwordValue(body.password);
-  const requestedName = optionalString(body.display_name, '姓名', 80);
+  const requestedName = optionalString(body.display_name, '氏名', 80);
   const displayName = requestedName ? displayNameValue(requestedName) : username;
   const defaultOneWayFare = optionalFare(body.default_one_way_fare) ?? null;
   const defaultTripType = optionalTripType(body.default_trip_type) ?? 'round_trip';
   const defaultTransportMode = optionalTransportMode(body.default_transport_mode) ?? 'rail';
-  const defaultTransportOrigin = optionalString(body.default_transport_origin, '出发地', 120) ?? '';
-  const defaultTransportDestination = optionalString(body.default_transport_destination, '到达地', 120) ?? '';
-  const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间') ?? null;
-  const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间') ?? null;
+  const defaultTransportOrigin = optionalString(body.default_transport_origin, '出発地', 120) ?? '';
+  const defaultTransportDestination = optionalString(body.default_transport_destination, '到着地', 120) ?? '';
+  const defaultClockIn = nullableTime(body.default_clock_in, 'デフォルト出勤時間') ?? null;
+  const defaultClockOut = nullableTime(body.default_clock_out, 'デフォルト退勤時間') ?? null;
   const defaultBreakMinutes = boundedInteger(
     body.default_break_minutes,
-    '默认休息分钟',
+    'デフォルト休憩（分）',
     0,
     480,
     getPublicConfig(c.env).default_break_minutes,
@@ -274,7 +270,7 @@ auth.post('/setup', async (c) => {
   const results = await c.env.DB.batch([insert, setupAudit]);
   const user = results[0]?.results?.[0] as User | undefined;
 
-  if (!user) return c.json({ error: '初期设置已完成' }, 403);
+  if (!user) return c.json({ error: 'システムの初期設定はすでに完了しています' }, 403);
 
   const session = await createSession(c.env, user.id, user.auth_version);
   if (!session) throw new Error('Initial session creation failed');
@@ -289,14 +285,14 @@ auth.post('/setup', async (c) => {
 auth.post('/login', async (c) => {
   const body = await readJsonObject(c.req.raw);
   assertOnlyKeys(body, ['username', 'password']);
-  const username = loginIdentifier(body.username, '登录名', 64);
-  const password = credentialString(body.password, '密码', 128);
+  const username = loginIdentifier(body.username, 'ログインID', 64);
+  const password = credentialString(body.password, 'パスワード', 128);
   const [addressAllowed, accountAllowed] = await Promise.all([
     checkRateLimit(c.env.AUTH_RATE_LIMITER, `login-ip:${clientAddress(c.req.raw)}`, c.req.raw),
     checkRateLimit(c.env.AUTH_RATE_LIMITER, `login-account:${username.toLowerCase()}`, c.req.raw),
   ]);
   if (!addressAllowed || !accountAllowed) {
-    return c.json({ error: '尝试次数过多，请稍后再试' }, 429);
+    return c.json({ error: '試行回数が多すぎます。しばらくしてからもう一度お試しください' }, 429);
   }
 
   const row = await c.env.DB.prepare(
@@ -326,12 +322,12 @@ auth.post('/login', async (c) => {
 
   const valid = await verifyPassword(password, row?.password_hash ?? DUMMY_PASSWORD_HASH);
   if (!row || !valid) {
-    return c.json({ error: '登录名或密码不正确' }, 401);
+    return c.json({ error: 'ログインIDまたはパスワードが間違っています' }, 401);
   }
 
   const session = await createSession(c.env, row.id, row.auth_version);
   if (!session) {
-    return c.json({ error: '登录状态已更新，请重新尝试' }, 409);
+    return c.json({ error: 'ログイン状態が更新されました。もう一度お試しください' }, 409);
   }
   return c.json(
     { success: true, user: toPublicUser(row) },
@@ -351,7 +347,7 @@ auth.post('/logout', async (c) => {
       error: error instanceof Error ? error.message : String(error),
     }));
     return c.json(
-      { error: '退出登录失败，请稍后重试' },
+      { error: 'ログアウトに失敗しました。しばらくしてからもう一度お試しください' },
       503,
       { 'Set-Cookie': clearSessionCookie() },
     );
@@ -394,15 +390,15 @@ auth.patch('/profile', authMiddleware, async (c) => {
   const defaultTransportMode = optionalTransportMode(body.default_transport_mode);
   const defaultTransportOrigin = body.default_transport_origin === undefined
     ? undefined
-    : optionalString(body.default_transport_origin, '出发地', 120) ?? '';
+    : optionalString(body.default_transport_origin, '出発地', 120) ?? '';
   const defaultTransportDestination = body.default_transport_destination === undefined
     ? undefined
-    : optionalString(body.default_transport_destination, '到达地', 120) ?? '';
-  const defaultClockIn = nullableTime(body.default_clock_in, '默认出勤时间');
-  const defaultClockOut = nullableTime(body.default_clock_out, '默认退勤时间');
+    : optionalString(body.default_transport_destination, '到着地', 120) ?? '';
+  const defaultClockIn = nullableTime(body.default_clock_in, 'デフォルト出勤時間');
+  const defaultClockOut = nullableTime(body.default_clock_out, 'デフォルト退勤時間');
   const defaultBreakMinutes = body.default_break_minutes === undefined
     ? undefined
-    : boundedInteger(body.default_break_minutes, '默认休息分钟', 0, 480);
+    : boundedInteger(body.default_break_minutes, 'デフォルト休憩（分）', 0, 480);
   const defaultWorkType = body.default_work_type === undefined
     ? undefined
     : defaultWorkTypeValue(body.default_work_type);
@@ -458,7 +454,7 @@ auth.patch('/profile', authMiddleware, async (c) => {
   }
 
   if (assignments.length === 0) {
-    throw new RequestValidationError('请至少提交一个可修改字段');
+    throw new RequestValidationError('更新する項目を少なくとも1つ指定してください');
   }
 
   values.push(currentUser.id);
@@ -526,14 +522,14 @@ auth.post('/profile/password/verify', authMiddleware, async (c) => {
   const currentUser = c.get('user');
   const body = await readJsonObject(c.req.raw);
   assertOnlyKeys(body, ['current_password']);
-  const currentPassword = credentialString(body.current_password, '当前密码', 128);
+  const currentPassword = credentialString(body.current_password, '現在のパスワード', 128);
 
   const [verifyAddressAllowed, verifyAccountAllowed] = await Promise.all([
     checkRateLimit(c.env.AUTH_RATE_LIMITER, `password-verify-ip:${clientAddress(c.req.raw)}`, c.req.raw),
     checkRateLimit(c.env.AUTH_RATE_LIMITER, `password-verify-account:${currentUser.id}`, c.req.raw),
   ]);
   if (!verifyAddressAllowed || !verifyAccountAllowed) {
-    return c.json({ error: '尝试次数过多，请稍后再试' }, 429);
+    return c.json({ error: '試行回数が多すぎます。しばらくしてからもう一度お試しください' }, 429);
   }
 
   const credential = await c.env.DB.prepare(
@@ -544,7 +540,7 @@ auth.post('/profile/password/verify', authMiddleware, async (c) => {
   const valid = credential
     ? await verifyPassword(currentPassword, credential.password_hash)
     : false;
-  if (!valid) return c.json({ error: '当前密码不正确' }, 401);
+  if (!valid) return c.json({ error: '現在のパスワードが正しくありません' }, 401);
 
   const reauthToken = await markSessionReauthenticated(c.env, c.req.raw, currentUser.id);
   if (!reauthToken) return c.json({ error: 'Unauthorized' }, 401);
@@ -560,8 +556,8 @@ auth.post('/profile/password', authMiddleware, async (c) => {
   const currentUser = c.get('user');
   const body = await readJsonObject(c.req.raw);
   assertOnlyKeys(body, ['new_password', 'reauth_token']);
-  const newPassword = passwordValue(body.new_password, '新密码');
-  const reauthToken = credentialString(body.reauth_token, '重新验证凭据', 64);
+  const newPassword = passwordValue(body.new_password, '新しいパスワード');
+  const reauthToken = credentialString(body.reauth_token, '再認証トークン', 64);
 
   const recentlyVerified = await consumePasswordReauthentication(
     c.env,
@@ -570,7 +566,7 @@ auth.post('/profile/password', authMiddleware, async (c) => {
     reauthToken,
   );
   if (!recentlyVerified) {
-    return c.json({ error: '请先重新验证当前密码' }, 403);
+    return c.json({ error: '現在のパスワードを再認証してください' }, 403);
   }
 
   const passwordHash = await hashPassword(newPassword);
@@ -592,7 +588,7 @@ auth.post('/profile/password', authMiddleware, async (c) => {
   const session = await createSession(c.env, currentUser.id, credential.auth_version);
   if (!session) {
     return c.json(
-      { error: '凭据状态已更新，请使用新密码重新登录' },
+      { error: 'パスワードが更新されました。新しいパスワードで再ログインしてください' },
       409,
       { 'Set-Cookie': clearSessionCookie() },
     );
@@ -627,30 +623,6 @@ function authAuditStatement(
 
 function clientAddress(request: Request): string {
   return request.headers.get('CF-Connecting-IP')?.slice(0, 64) || 'unknown';
-}
-
-async function checkRateLimit(
-  limiter: RateLimit | undefined,
-  key: string,
-  request?: Request,
-): Promise<boolean> {
-  const localPreview = request ? isLocalPreviewRequest(request) : false;
-  if (!limiter || typeof limiter.limit !== 'function') return localPreview;
-  try {
-    const result = await limiter.limit({ key });
-    return result.success;
-  } catch (error) {
-    console.error(JSON.stringify({
-      message: 'authentication rate limiter failed',
-      error: error instanceof Error ? error.message : String(error),
-    }));
-    return localPreview;
-  }
-}
-
-function isLocalPreviewRequest(request: Request): boolean {
-  const hostname = new URL(request.url).hostname;
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
 export default auth;

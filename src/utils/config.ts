@@ -42,6 +42,7 @@ export function getUserCommuteDefaults(
     | 'default_transport_origin'
     | 'default_transport_destination'
   >,
+  cachedConfig?: PublicAppConfig,
 ): {
   one_way_fare: number;
   trip_type: TransportTripType;
@@ -49,7 +50,7 @@ export function getUserCommuteDefaults(
   transport_origin: string;
   transport_destination: string;
 } {
-  const config = getPublicConfig(env);
+  const config = cachedConfig ?? getPublicConfig(env);
   return {
     one_way_fare: user.default_one_way_fare ?? config.default_one_way_fare,
     trip_type: user.default_trip_type || config.default_trip_type,

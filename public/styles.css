@@ -113,6 +113,10 @@ textarea:disabled {
   outline-offset: 2px;
 }
 
+#main-content:focus {
+  outline: none;
+}
+
 .centered-view,
 .auth-shell {
   display: grid;

@@ -44,7 +44,7 @@ export interface Holiday {
   name_ja: string;
 }
 
-export type HolidayDataSource = 'cache' | 'official-csv' | 'bundled-official' | 'unavailable';
+export type HolidayDataSource = 'cache' | 'official-csv' | 'rule-based' | 'unavailable';
 
 export interface HolidayData {
   year: number;

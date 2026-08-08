@@ -6,6 +6,7 @@ import { buildHolidayMap, getHolidayData } from '../utils/holidays';
 import { buildMonthlySummary } from '../utils/summary';
 import { nowTimeJST, previousDate, timeToMinutes, todayJST } from '../utils/time';
 import {
+  assertOnlyKeys,
   boundedInteger,
   dateValue,
   nullableBoundedInteger,
@@ -72,20 +73,30 @@ attendance.get('/today', async (c) => {
 attendance.post('/clock-in', async (c) => {
   const user = c.get('user');
   const body = await readJsonObject(c.req.raw);
+  assertOnlyKeys(body, [
+    'work_type',
+    'clock_in',
+    'break_minutes',
+    'transport_trip_type',
+    'transport_mode',
+    'transport_origin',
+    'transport_destination',
+    'transport_one_way_fee',
+  ]);
   const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
   const workType = workTypeValue(body.work_type, attendanceDefaults.work_type);
   if (!isClockable(workType)) {
-    throw new RequestValidationError('打刻只能选择出社或在宅勤務');
+    throw new RequestValidationError('打刻は出社または在宅勤務のみ選択可能です');
   }
 
   const date = todayJST();
-  const clockIn = nullableTime(body.clock_in, '出勤时刻') ?? nowTimeJST();
-  if (!clockIn) throw new RequestValidationError('出勤时刻不能为空');
+  const clockIn = nullableTime(body.clock_in, '出勤時刻') ?? nowTimeJST();
+  if (!clockIn) throw new RequestValidationError('出勤時刻は必須です');
 
   const defaults = getUserCommuteDefaults(c.env, user);
   const breakMinutes = boundedInteger(
     body.break_minutes,
-    '休息分钟',
+    '休憩（分）',
     0,
     480,
     attendanceDefaults.break_minutes,
@@ -96,11 +107,11 @@ attendance.post('/clock-in', async (c) => {
   const requestedTransportMode = body.transport_mode === undefined
     ? undefined
     : transportModeValue(body.transport_mode);
-  const requestedOrigin = optionalString(body.transport_origin, '出发地', 120);
-  const requestedDestination = optionalString(body.transport_destination, '到达地', 120);
+  const requestedOrigin = optionalString(body.transport_origin, '出発地', 120);
+  const requestedDestination = optionalString(body.transport_destination, '到着地', 120);
   const requestedFare = nullableBoundedInteger(
     body.transport_one_way_fee,
-    '片道交通费',
+    '片道交通費',
     0,
     100_000,
   );
@@ -154,7 +165,7 @@ attendance.post('/clock-in', async (c) => {
   );
   const record = await upsert.first<Attendance>();
 
-  if (!record) return c.json({ error: '今天已经打过出勤卡' }, 409);
+  if (!record) return c.json({ error: '今日はすでに出勤打刻済みです' }, 409);
   return c.json({ success: true, record });
 });
 
@@ -163,15 +174,16 @@ attendance.post('/clock-out', async (c) => {
   const body: Record<string, unknown> = c.req.raw.body === null
     ? {}
     : await readJsonObject(c.req.raw);
-  const clockOut = nullableTime(body.clock_out, '退勤时刻') ?? nowTimeJST();
-  if (!clockOut) throw new RequestValidationError('退勤时刻不能为空');
+  assertOnlyKeys(body, ['clock_out']);
+  const clockOut = nullableTime(body.clock_out, '退勤時刻') ?? nowTimeJST();
+  if (!clockOut) throw new RequestValidationError('退勤時刻は必須です');
   const date = todayJST();
   const todayRecord = await c.env.DB.prepare(
     'SELECT * FROM attendance WHERE user_id = ? AND work_date = ?',
   )
     .bind(user.id, date)
     .first<Attendance>();
-  if (todayRecord?.clock_out) return c.json({ error: '今天已经打过退勤卡' }, 409);
+  if (todayRecord?.clock_out) return c.json({ error: '今日はすでに退勤打刻済みです' }, 409);
 
   let openRecord = todayRecord?.clock_in && !todayRecord.clock_out
     && isClockable(todayRecord.work_type)
@@ -189,13 +201,13 @@ attendance.post('/clock-out', async (c) => {
       .first<Attendance>();
   }
 
-  if (!openRecord) return c.json({ error: '请先打出勤卡' }, 400);
+  if (!openRecord) return c.json({ error: '先に出勤打刻をしてください' }, 400);
   if (
     openRecord.work_date !== date
     && openRecord.clock_in
     && timeToMinutes(clockOut) >= timeToMinutes(openRecord.clock_in)
   ) {
-    return c.json({ error: '前一天的出勤已超过 24 小时，请在补录画面中修正' }, 409);
+    return c.json({ error: '前日の出勤から24時間を経過しています。打刻修正画面から修正してください' }, 409);
   }
 
   const record = await c.env.DB.prepare(
@@ -209,7 +221,7 @@ attendance.post('/clock-out', async (c) => {
     .bind(clockOut, user.id, openRecord.work_date)
     .first<Attendance>();
 
-  if (!record) return c.json({ error: '退勤记录已被更新，请重新载入' }, 409);
+  if (!record) return c.json({ error: '退勤記録が更新されました。画面を再読み込みしてください' }, 409);
   return c.json({ success: true, record });
 });
 
@@ -222,6 +234,18 @@ attendance.put('/:date', async (c) => {
   const user = c.get('user');
   const date = dateValue(c.req.param('date'));
   const body = await readJsonObject(c.req.raw);
+  assertOnlyKeys(body, [
+    'work_type',
+    'clock_in',
+    'clock_out',
+    'break_minutes',
+    'transport_trip_type',
+    'transport_mode',
+    'transport_origin',
+    'transport_destination',
+    'transport_one_way_fee',
+    'memo',
+  ]);
   const existing = await c.env.DB.prepare(
     'SELECT * FROM attendance WHERE user_id = ? AND work_date = ?',
   )
@@ -231,16 +255,16 @@ attendance.put('/:date', async (c) => {
   const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
   const defaults = getUserCommuteDefaults(c.env, user);
   const workType = workTypeValue(body.work_type, existing?.work_type ?? attendanceDefaults.work_type);
-  let clockIn = nullableTime(body.clock_in, '出勤时刻');
-  let clockOut = nullableTime(body.clock_out, '退勤时刻');
+  let clockIn = nullableTime(body.clock_in, '出勤時刻');
+  let clockOut = nullableTime(body.clock_out, '退勤時刻');
   let breakMinutes = boundedInteger(
     body.break_minutes,
-    '休息分钟',
+    '休憩（分）',
     0,
     480,
     existing?.break_minutes ?? attendanceDefaults.break_minutes,
   );
-  const memo = optionalString(body.memo, '备注', 500) ?? existing?.memo ?? '';
+  const memo = optionalString(body.memo, '備考', 500) ?? existing?.memo ?? '';
   const preserveExistingCommute = existing?.work_type === 'office';
   let tripType = tripTypeValue(
     body.transport_trip_type,
@@ -250,15 +274,15 @@ attendance.put('/:date', async (c) => {
     body.transport_mode,
     preserveExistingCommute ? existing.transport_mode : defaults.transport_mode,
   );
-  const requestedOrigin = optionalString(body.transport_origin, '出发地', 120);
-  const requestedDestination = optionalString(body.transport_destination, '到达地', 120);
+  const requestedOrigin = optionalString(body.transport_origin, '出発地', 120);
+  const requestedDestination = optionalString(body.transport_destination, '到着地', 120);
   let transportOrigin = requestedOrigin
     ?? (preserveExistingCommute ? existing.transport_origin : defaults.transport_origin);
   let transportDestination = requestedDestination
     ?? (preserveExistingCommute ? existing.transport_destination : defaults.transport_destination);
   const requestedFare = nullableBoundedInteger(
     body.transport_one_way_fee,
-    '片道交通费',
+    '片道交通費',
     0,
     100_000,
   );
@@ -270,7 +294,7 @@ attendance.put('/:date', async (c) => {
   if (isClockable(workType)) {
     if (clockIn === undefined) clockIn = existing?.clock_in ?? null;
     if (clockOut === undefined) clockOut = existing?.clock_out ?? null;
-    if (!clockIn && clockOut) throw new RequestValidationError('填写退勤时刻前必须先填写出勤时刻');
+    if (!clockIn && clockOut) throw new RequestValidationError('退勤時刻を入力する前に出勤時刻を入力してください');
   } else {
     clockIn = null;
     clockOut = null;
@@ -338,7 +362,7 @@ attendance.delete('/:date', async (c) => {
   )
     .bind(user.id, date)
     .first<Attendance>();
-  if (!existing) return c.json({ error: '该日期没有可删除的记录' }, 404);
+  if (!existing) return c.json({ error: 'この日に削除できる記録はありません' }, 404);
   return c.json({ success: true });
 });
 

@@ -20,11 +20,11 @@ export async function readJsonObject(
   try {
     value = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
-    throw new RequestValidationError('JSON 格式不正确');
+    throw new RequestValidationError('JSONの形式が正しくありません');
   }
 
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new RequestValidationError('请求内容必须是 JSON 对象');
+    throw new RequestValidationError('リクエストボディはJSONオブジェクトである必要があります');
   }
   return value as Record<string, unknown>;
 }
@@ -34,10 +34,10 @@ export async function readBodyBytes(request: Request, maxBytes: number): Promise
   if (lengthHeader) {
     const length = Number(lengthHeader);
     if (!Number.isInteger(length) || length < 0) {
-      throw new RequestValidationError('Content-Length 不正确');
+      throw new RequestValidationError('Content-Lengthが正しくありません');
     }
     if (length > maxBytes) {
-      throw new RequestValidationError('请求内容过大', 413);
+      throw new RequestValidationError('リクエストのサイズが大きすぎます', 413);
     }
   }
 
@@ -54,7 +54,7 @@ export async function readBodyBytes(request: Request, maxBytes: number): Promise
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel('body too large');
-        throw new RequestValidationError('请求内容过大', 413);
+        throw new RequestValidationError('リクエストのサイズが大きすぎます', 413);
       }
       chunks.push(value);
     }
@@ -77,45 +77,45 @@ export function requiredString(
   minLength: number,
   maxLength: number,
 ): string {
-  if (typeof value !== 'string') throw new RequestValidationError(`${label}不能为空`);
+  if (typeof value !== 'string') throw new RequestValidationError(`${label}は必須です`);
   const normalized = value.normalize('NFKC').trim();
   if (normalized.length < minLength || normalized.length > maxLength) {
-    throw new RequestValidationError(`${label}长度必须为 ${minLength}-${maxLength} 个字符`);
+    throw new RequestValidationError(`${label}は${minLength}文字以上${maxLength}文字以内で入力してください`);
   }
-  if (/\p{Cc}/u.test(normalized)) throw new RequestValidationError(`${label}包含无效字符`);
+  if (/\p{C}/u.test(normalized)) throw new RequestValidationError(`${label}に無効な文字が含まれています`);
   return normalized;
 }
 
 export function optionalString(value: unknown, label: string, maxLength: number): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== 'string') throw new RequestValidationError(`${label}格式不正确`);
+  if (typeof value !== 'string') throw new RequestValidationError(`${label}の形式が正しくありません`);
   const normalized = value.normalize('NFKC').trim();
-  if (normalized.length > maxLength || /\p{Cc}/u.test(normalized)) {
-    throw new RequestValidationError(`${label}最多 ${maxLength} 个字符`);
+  if (normalized.length > maxLength || /\p{C}/u.test(normalized)) {
+    throw new RequestValidationError(`${label}は最大${maxLength}文字までです`);
   }
   return normalized;
 }
 
 export function displayNameValue(value: unknown): string {
-  const displayName = requiredString(value, '姓名', 1, 80);
+  const displayName = requiredString(value, '氏名', 1, 80);
   const visible = displayName.replace(/[\p{C}\p{Z}]/gu, '');
   if (!visible || !/[\p{L}\p{N}\p{M}\p{S}]/u.test(visible)) {
-    throw new RequestValidationError('姓名必须包含可显示的文字');
+    throw new RequestValidationError('氏名には表示可能な文字を含める必要があります');
   }
   return displayName;
 }
 
 export function usernameValue(value: unknown): string {
-  const username = requiredString(value, '登录名', 3, 64);
+  const username = requiredString(value, 'ログインID', 3, 64);
   if (!/^[A-Za-z0-9._-]+$/.test(username)) {
-    throw new RequestValidationError('登录名只能包含英文字母、数字、点、下划线和连字符');
+    throw new RequestValidationError('ログインIDは半角英数字、ドット、アンダースコア、ハイフンのみ使用可能です');
   }
-  return username;
+  return username.toLowerCase();
 }
 
-export function passwordValue(value: unknown, label = '密码'): string {
+export function passwordValue(value: unknown, label = 'パスワード'): string {
   if (typeof value !== 'string' || value.length < 12 || value.length > 128) {
-    throw new RequestValidationError(`${label}长度必须为 12-128 个字符`);
+    throw new RequestValidationError(`${label}は12〜128文字で入力してください`);
   }
   return value;
 }
@@ -125,7 +125,7 @@ export function workTypeValue(value: unknown, fallback?: WorkType): WorkType {
   if (value === 'office' || value === 'remote' || value === 'paid_leave' || value === 'holiday' || value === 'absent') {
     return value;
   }
-  throw new RequestValidationError('勤務区分不正确');
+  throw new RequestValidationError('勤務区分が正しくありません');
 }
 
 export function defaultWorkTypeValue(
@@ -140,13 +140,13 @@ export function defaultWorkTypeValue(
 export function tripTypeValue(value: unknown, fallback?: TransportTripType): TransportTripType {
   if (value === undefined && fallback) return fallback;
   if (value === 'one_way' || value === 'round_trip') return value;
-  throw new RequestValidationError('交通费区分不正确');
+  throw new RequestValidationError('交通費区分が正しくありません');
 }
 
 export function transportModeValue(value: unknown, fallback?: TransportMode): TransportMode {
   if (value === undefined && fallback) return fallback;
   if (value === 'rail' || value === 'bus' || value === 'taxi' || value === 'other') return value;
-  throw new RequestValidationError('交通手段不正确');
+  throw new RequestValidationError('交通手段が正しくありません');
 }
 
 export function boundedInteger(
@@ -158,7 +158,7 @@ export function boundedInteger(
 ): number {
   if (value === undefined && fallback !== undefined) return fallback;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
-    throw new RequestValidationError(`${label}必须是 ${min}-${max} 的整数`);
+    throw new RequestValidationError(`${label}は${min}から${max}までの整数で指定してください`);
   }
   return value;
 }
@@ -175,9 +175,9 @@ export function nullableBoundedInteger(
 }
 
 export function positiveIdValue(value: string): number {
-  if (!/^\d+$/.test(value)) throw new RequestValidationError('ID 不正确');
+  if (!/^\d+$/.test(value)) throw new RequestValidationError('IDが正しくありません');
   const id = Number(value);
-  if (!Number.isSafeInteger(id) || id < 1) throw new RequestValidationError('ID 不正确');
+  if (!Number.isSafeInteger(id) || id < 1) throw new RequestValidationError('IDが正しくありません');
   return id;
 }
 
@@ -185,22 +185,29 @@ export function nullableTime(value: unknown, label: string): string | null | und
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
   if (typeof value !== 'string' || !isValidTime(value)) {
-    throw new RequestValidationError(`${label}必须是 HH:MM 格式`);
+    throw new RequestValidationError(`${label}はHH:MM形式で指定してください`);
   }
   return value;
 }
 
 export function dateValue(value: string): string {
-  if (!isValidDate(value)) throw new RequestValidationError('日期必须是有效的 YYYY-MM-DD');
+  if (!isValidDate(value)) throw new RequestValidationError('日付はYYYY-MM-DD形式で指定してください');
   return value;
 }
 
 export function yearMonthValues(yearText: string, monthText: string): { year: number; month: number } {
   if (!/^\d{4}$/.test(yearText) || !/^(?:[1-9]|1[0-2])$/.test(monthText)) {
-    throw new RequestValidationError('年月不正确');
+    throw new RequestValidationError('年月が正しくありません');
   }
   const year = Number(yearText);
   const month = Number(monthText);
-  if (year < 1955 || year > 2100) throw new RequestValidationError('年份必须在 1955-2100 之间');
+  if (year < 1955 || year > 2100) throw new RequestValidationError('年は1955から2100の間で指定してください');
   return { year, month };
+}
+
+export function assertOnlyKeys(body: Record<string, unknown>, allowed: readonly string[]): void {
+  const allowedKeys = new Set(allowed);
+  if (Object.keys(body).some((key) => !allowedKeys.has(key))) {
+    throw new RequestValidationError('リクエストにサポートされていないフィールドが含まれています');
+  }
 }

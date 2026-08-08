@@ -26,6 +26,8 @@
     overtime_threshold_hours: 180,
   });
 
+  let _dtfMonth = null;
+
   const state = {
     config: { ...DEFAULT_CONFIG },
     user: null,
@@ -41,6 +43,16 @@
     clockTimer: null,
   };
 
+  const DOM = {
+    clockWorkingFields: null,
+    recordWorkingFields: null,
+    recordOfficeFields: null,
+    pagePanels: null,
+    pageButtons: null,
+  };
+
+  let clockTimeEdited = false;
+
   class ApiError extends Error {
     constructor(message, status, data) {
       super(message);
@@ -52,8 +64,6 @@
 
   const byId = (id) => document.getElementById(id);
 
-  void initialize();
-
   async function initialize() {
     applyStoredTheme();
     bindEvents();
@@ -64,7 +74,7 @@
 
     try {
       await loadConfig();
-      applyConfigDefaults();
+      cacheDOM();
       const status = await loadAuthStatus();
       if (status.authenticated && status.user) {
         await enterApplication(status.user);
@@ -79,22 +89,33 @@
     }
   }
 
+  function cacheDOM() {
+    DOM.clockWorkingFields = document.querySelectorAll('[data-working-field]');
+    DOM.recordWorkingFields = document.querySelectorAll('[data-record-working-field]');
+    DOM.recordOfficeFields = document.querySelectorAll('[data-record-office-field]');
+    DOM.pagePanels = document.querySelectorAll('[data-page-panel]');
+    DOM.pageButtons = document.querySelectorAll('[data-page]');
+  }
+
   function bindEvents() {
     byId('login-form').addEventListener('submit', handleLogin);
     byId('setup-form').addEventListener('submit', handleSetup);
     byId('logout-button').addEventListener('click', handleLogout);
     byId('theme-button').addEventListener('click', toggleTheme);
 
-    document.querySelectorAll('[data-page]').forEach((button) => {
-      button.addEventListener('click', () => void navigate(button.dataset.page));
-    });
-
-    document.querySelectorAll('[data-month-delta]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const target = button.dataset.monthTarget;
-        const delta = Number(button.dataset.monthDelta);
+    // Using event delegation for page navigation
+    document.addEventListener('click', (event) => {
+      const pageBtn = event.target.closest('[data-page]');
+      if (pageBtn) {
+        void navigate(pageBtn.dataset.page);
+        return;
+      }
+      const deltaBtn = event.target.closest('[data-month-delta]');
+      if (deltaBtn) {
+        const target = deltaBtn.dataset.monthTarget;
+        const delta = Number(deltaBtn.dataset.monthDelta);
         changeMonth(target, Number.isFinite(delta) ? delta : 0);
-      });
+      }
     });
 
     byId('calendar-month').addEventListener('change', () => {
@@ -118,6 +139,7 @@
     });
 
     byId('clock-work-type').addEventListener('change', updateClockForm);
+    byId('clock-in-time').addEventListener('input', () => { clockTimeEdited = true; });
     byId('clock-in-form').addEventListener('submit', handleClockIn);
     byId('clock-out-button').addEventListener('click', handleClockOut);
     byId('edit-today-button').addEventListener('click', () => {
@@ -273,8 +295,8 @@
       username,
       display_name: byId('setup-display-name').value.trim(),
       password,
-      default_one_way_fare: integerInput(byId('setup-fare'), state.config.default_one_way_fare, 0, 100000),
-      default_trip_type: normalizeTripType(byId('setup-trip-type').value) || 'round_trip',
+      default_one_way_fare: state.config.default_one_way_fare,
+      default_trip_type: state.config.default_trip_type,
     };
     if (!payload.setup_token || !payload.username || !payload.display_name) {
       toast('セットアップトークン、ログイン名、氏名を入力してください。', 'error');
@@ -346,15 +368,9 @@
     updateExcelFilenamePreview();
   }
 
-  function applyConfigDefaults() {
-    byId('setup-fare').value = String(state.config.default_one_way_fare);
-    byId('setup-trip-type').value = state.config.default_trip_type;
-    byId('admin-new-fare').value = String(state.config.default_one_way_fare);
-  }
-
   function applyUserDefaults() {
     byId('clock-break').value = String(userBreakMinutes());
-    byId('clock-in-time').value = nowTime();
+    resetClockActionTime();
     byId('clock-work-type').value = userWorkType();
     updateClockForm();
   }
@@ -365,12 +381,12 @@
     if (nextPage === 'admin' && !state.user?.is_admin) return;
     state.page = nextPage;
 
-    document.querySelectorAll('[data-page-panel]').forEach((panel) => {
+    DOM.pagePanels.forEach((panel) => {
       const active = panel.dataset.pagePanel === nextPage;
       panel.hidden = !active;
       panel.classList.toggle('is-active', active);
     });
-    document.querySelectorAll('[data-page]').forEach((button) => {
+    DOM.pageButtons.forEach((button) => {
       const active = button.dataset.page === nextPage;
       button.classList.toggle('is-active', active);
       if (active) button.setAttribute('aria-current', 'page');
@@ -476,7 +492,7 @@
   function updateClockForm() {
     const type = normalizeWorkType(byId('clock-work-type').value) || 'office';
     const working = isWorking(type);
-    document.querySelectorAll('[data-working-field]').forEach((field) => {
+    DOM.clockWorkingFields.forEach((field) => {
       field.hidden = !working;
       field.querySelectorAll('input, select').forEach((input) => { input.disabled = !working; });
     });
@@ -508,7 +524,7 @@
             body: clearedNonWorkingRecord(type, ''),
           });
         } else {
-          const clockIn = validTime(byId('clock-in-time').value) || nowTime();
+          const clockIn = clockActionTime();
           const body = {
             work_type: type,
             clock_in: clockIn,
@@ -523,35 +539,46 @@
         }
         invalidateMonth(date.slice(0, 7));
         await loadToday();
+        resetClockActionTime();
         toast('勤務を記録しました。', 'success');
       } catch (error) {
         handleAuthenticatedError(error, '勤務を記録できませんでした。');
       }
     });
+    if (state.today) renderToday(state.today);
   }
 
   async function handleClockOut() {
-    if (!window.confirm('現在時刻で退勤を記録しますか？')) return;
+    const clockOut = clockActionTime();
+    if (!window.confirm(`${clockOut} で退勤を記録しますか？`)) return;
     await withBusy(byId('clock-out-button'), '記録中…', async () => {
       try {
         await api('/api/attendance/clock-out', {
           method: 'POST',
-          body: { clock_out: nowTime() },
+          body: { clock_out: clockOut },
         });
         invalidateMonth((state.today?.date || todayIso()).slice(0, 7));
         await loadToday();
+        resetClockActionTime();
         toast('退勤を記録しました。', 'success');
       } catch (error) {
         handleAuthenticatedError(error, '退勤を記録できませんでした。');
       }
     });
+    if (state.today) renderToday(state.today);
   }
 
+  let calendarRequestVersion = 0;
   async function loadCalendar(force) {
+    const version = ++calendarRequestVersion;
+    const requestedMonth = state.calendarMonth;
     try {
-      state.calendarSummary = await loadMonthData(state.calendarMonth, force);
-      renderCalendar(state.calendarSummary);
+      const summary = await loadMonthData(requestedMonth, force);
+      if (version !== calendarRequestVersion || requestedMonth !== state.calendarMonth) return;
+      state.calendarSummary = summary;
+      renderCalendar(summary);
     } catch (error) {
+      if (version !== calendarRequestVersion) return;
       handleAuthenticatedError(error, 'カレンダーを取得できませんでした。');
     }
   }
@@ -567,6 +594,7 @@
 
     const recordMap = new Map(summary.records.map((record) => [record.work_date, record]));
     const days = new Date(Date.UTC(summary.year, summary.month, 0)).getUTCDate();
+    const today = todayIso();
     for (let day = 1; day <= days; day += 1) {
       const date = `${summary.year}-${String(summary.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const record = recordMap.get(date) || normalizeRecord({}, { date });
@@ -575,7 +603,7 @@
         type: 'button',
         ariaLabel: `${formatJapaneseDate(date)}の勤務を編集`,
       });
-      if (date === todayIso()) button.classList.add('is-today');
+      if (date === today) button.classList.add('is-today');
       if (record.is_holiday) button.classList.add('is-holiday');
       if (record.day_of_week === 0) button.classList.add('is-sunday');
       if (record.day_of_week === 6) button.classList.add('is-saturday');
@@ -596,13 +624,32 @@
       button.addEventListener('click', () => void openRecordEditor(date, summary));
       grid.append(button);
     }
+
+    const holiday = summary.holiday_data || {};
+    const sourceLabels = {
+      cache: '保存済みの祝日データ',
+      'official-csv': '内閣府の祝日CSV',
+      'rule-based': '通用ルールによる推算（特例の祝日移動等は反映されません）',
+      unavailable: '祝日データを取得できませんでした',
+    };
+    const note = byId('calendar-holiday-source-note');
+    if (note) {
+      note.textContent = `祝日情報：${sourceLabels[holiday.source] || '取得元不明'}${holiday.synced_at ? `（同期：${formatDateTime(holiday.synced_at)}）` : ''}`;
+      note.dataset.incomplete = holiday.complete === false ? 'true' : 'false';
+    }
   }
 
+  let summaryRequestVersion = 0;
   async function loadSummary(force) {
+    const version = ++summaryRequestVersion;
+    const requestedMonth = state.summaryMonth;
     try {
-      state.summary = await loadMonthData(state.summaryMonth, force);
-      renderSummary(state.summary);
+      const summary = await loadMonthData(requestedMonth, force);
+      if (version !== summaryRequestVersion || requestedMonth !== state.summaryMonth) return;
+      state.summary = summary;
+      renderSummary(summary);
     } catch (error) {
+      if (version !== summaryRequestVersion) return;
       handleAuthenticatedError(error, '月次集計を取得できませんでした。');
     }
   }
@@ -662,12 +709,14 @@
     const sourceLabels = {
       cache: '保存済みの祝日データ',
       'official-csv': '内閣府の祝日CSV',
-      'bundled-official': '同梱した公式祝日データ',
+      'rule-based': '通用ルールによる推算（特例の祝日移動等は反映されません）',
       unavailable: '祝日データを取得できませんでした',
     };
     const note = byId('holiday-source-note');
-    note.textContent = `祝日情報：${sourceLabels[holiday.source] || '取得元不明'}${holiday.synced_at ? `（同期：${formatDateTime(holiday.synced_at)}）` : ''}`;
-    note.dataset.incomplete = holiday.complete === false ? 'true' : 'false';
+    if (note) {
+      note.textContent = `祝日情報：${sourceLabels[holiday.source] || '取得元不明'}${holiday.synced_at ? `（同期：${formatDateTime(holiday.synced_at)}）` : ''}`;
+      note.dataset.incomplete = holiday.complete === false ? 'true' : 'false';
+    }
   }
 
   async function handleExcelDownload() {
@@ -844,11 +893,11 @@
     const originalRecord = state.editorRecord;
     const working = isWorking(type);
     const office = type === 'office';
-    document.querySelectorAll('[data-record-working-field]').forEach((field) => {
+    DOM.recordWorkingFields.forEach((field) => {
       field.hidden = !working;
       field.querySelectorAll('input, select').forEach((input) => { input.disabled = !working; });
     });
-    document.querySelectorAll('[data-record-office-field]').forEach((field) => {
+    DOM.recordOfficeFields.forEach((field) => {
       field.hidden = !office;
       field.querySelectorAll('input, select').forEach((input) => { input.disabled = !office; });
     });
@@ -1061,8 +1110,8 @@
       display_name: byId('admin-new-name').value.trim(),
       password: byId('admin-new-password').value,
       is_admin: byId('admin-new-is-admin').checked ? 1 : 0,
-      default_one_way_fare: integerInput(byId('admin-new-fare'), state.config.default_one_way_fare, 0, 100000),
-      default_trip_type: byId('admin-new-round-trip').checked ? 'round_trip' : 'one_way',
+      default_one_way_fare: state.config.default_one_way_fare,
+      default_trip_type: state.config.default_trip_type,
     };
     if (!username) {
       toast('ログイン名は3〜64文字の英数字・ドット・下線・ハイフンで入力してください。', 'error');
@@ -1076,8 +1125,6 @@
       try {
         await api('/api/admin/users', { method: 'POST', body });
         form.reset();
-        byId('admin-new-fare').value = String(state.config.default_one_way_fare);
-        byId('admin-new-round-trip').checked = true;
         await Promise.all([loadAdminUsers(), loadAdminOverview()]);
         toast('ユーザーを追加しました。', 'success');
       } catch (error) {
@@ -1086,13 +1133,18 @@
     });
   }
 
+  let adminOverviewRequestVersion = 0;
   async function loadAdminOverview() {
+    const version = ++adminOverviewRequestVersion;
+    const requestedMonth = state.adminMonth;
     try {
-      const [year, month] = splitMonth(state.adminMonth);
+      const [year, month] = splitMonth(requestedMonth);
       const raw = await api(`/api/admin/overview/${year}/${month}`);
+      if (version !== adminOverviewRequestVersion || requestedMonth !== state.adminMonth) return;
       const users = Array.isArray(raw.users) ? raw.users : (Array.isArray(raw.data?.users) ? raw.data.users : []);
       renderAdminOverview(users);
     } catch (error) {
+      if (version !== adminOverviewRequestVersion) return;
       handleAuthenticatedError(error, '月次勤務概要を取得できませんでした。');
     }
   }
@@ -1125,12 +1177,22 @@
   async function loadMonthData(monthValue, force) {
     const valid = validMonthValue(monthValue);
     if (!valid) throw new Error('年月が不正です。');
-    if (!force && state.monthCache.has(valid)) return state.monthCache.get(valid);
+    const cached = state.monthCache.get(valid);
+    if (cached && typeof cached.then === 'function') return cached;
+    if (!force && cached) return cached;
+    if (force) state.monthCache.delete(valid);
     const [year, month] = splitMonth(valid);
-    const raw = await api(`/api/attendance/${year}/${month}`);
-    const summary = normalizeMonthlySummary(raw, year, month);
-    state.monthCache.set(valid, summary);
-    return summary;
+    const loadPromise = api(`/api/attendance/${year}/${month}`)
+      .then((raw) => normalizeMonthlySummary(raw, year, month));
+    state.monthCache.set(valid, loadPromise);
+    try {
+      const summary = await loadPromise;
+      state.monthCache.set(valid, summary);
+      return summary;
+    } catch (error) {
+      state.monthCache.delete(valid);
+      throw error;
+    }
   }
 
   function normalizeMonthlySummary(raw, year, month) {
@@ -1290,12 +1352,19 @@
       }
     }
     if (!response.ok) {
-      const message = typeof data === 'object' && data
-        ? safeString(data.error || data.message, `HTTP ${response.status}`)
-        : safeString(data, `HTTP ${response.status}`);
+      let message = `HTTP ${response.status}`;
+      if (typeof data === 'object' && data) {
+        if (data.error && Array.isArray(data.error.issues)) {
+          message = data.error.issues.map((i) => i.message).join('、');
+        } else {
+          message = safeString(data.error || data.message, message);
+        }
+      } else {
+        message = safeString(data, message);
+      }
       throw new ApiError(message, response.status, data);
     }
-    return data || {};
+    return data ?? {};
   }
 
   function handleAuthenticatedError(error, fallback) {
@@ -1513,18 +1582,24 @@
     return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
   }
 
+  let _dtfFull = null;
+  let _dtfFullTz = null;
+  function getDateTimePartsFormatter() {
+    const tz = state.config.timezone || 'Asia/Tokyo';
+    if (!_dtfFull || _dtfFullTz !== tz) {
+      _dtfFullTz = tz;
+      _dtfFull = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hourCycle: 'h23',
+      });
+    }
+    return _dtfFull;
+  }
+
   function dateTimeParts() {
-    const formatter = new Intl.DateTimeFormat('ja-JP', {
-      timeZone: state.config.timezone || 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    });
-    return Object.fromEntries(formatter.formatToParts(new Date()).map((part) => [part.type, part.value]));
+    return Object.fromEntries(getDateTimePartsFormatter().formatToParts(new Date()).map((part) => [part.type, part.value]));
   }
 
   function todayIso() {
@@ -1533,17 +1608,31 @@
   }
 
   function currentMonthValue() {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat('ja-JP', {
-      timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit',
-    });
-    const parts = Object.fromEntries(formatter.formatToParts(now).map((part) => [part.type, part.value]));
+    if (!_dtfMonth) {
+      _dtfMonth = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit',
+      });
+    }
+    const parts = Object.fromEntries(_dtfMonth.formatToParts(new Date()).map((part) => [part.type, part.value]));
     return `${parts.year}-${parts.month}`;
   }
 
   function nowTime() {
     const parts = dateTimeParts();
     return `${parts.hour}:${parts.minute}`;
+  }
+
+  function clockActionTime() {
+    const input = byId('clock-in-time');
+    const manuallySelected = clockTimeEdited ? validTime(input.value) : null;
+    const value = manuallySelected || nowTime();
+    input.value = value;
+    return value;
+  }
+
+  function resetClockActionTime() {
+    byId('clock-in-time').value = nowTime();
+    clockTimeEdited = false;
   }
 
   function startClock() {
@@ -1563,13 +1652,20 @@
     return `${year}年${month}月${day}日`;
   }
 
+  let _dtfDateTime = null;
+  let _dtfDateTimeTz = null;
   function formatDateTime(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-    return new Intl.DateTimeFormat('ja-JP', {
-      timeZone: state.config.timezone,
-      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-    }).format(date);
+    const tz = state.config.timezone || 'Asia/Tokyo';
+    if (!_dtfDateTime || _dtfDateTimeTz !== tz) {
+      _dtfDateTimeTz = tz;
+      _dtfDateTime = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      });
+    }
+    return _dtfDateTime.format(date);
   }
 
   function formatMinutes(value) {
@@ -1577,9 +1673,10 @@
     return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;
   }
 
+  const JPY_FORMATTER = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
   function money(value) {
     const amount = Math.max(0, Math.round(Number(value) || 0));
-    return new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(amount);
+    return JPY_FORMATTER.format(amount);
   }
 
   function boundedInteger(value, fallback, min, max) {
@@ -1674,4 +1771,7 @@
     byId('theme-button').textContent = theme === 'light' ? '☾' : '☀';
     try { localStorage.setItem('kintai-theme', theme); } catch { /* storage can be unavailable */ }
   }
+
+  // Start only after every module-level formatter/cache has been initialized.
+  void initialize();
 })();
