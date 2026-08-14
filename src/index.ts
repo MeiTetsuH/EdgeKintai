@@ -45,7 +45,10 @@ app.get('/api/health/ready', authMiddleware, async (c) => {
   return c.json({ ok: true, db: true });
 });
 
-app.get('/api/config', (c) => c.json(getPublicConfig(c.env)));
+app.get('/api/config', (c) => {
+  c.header('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+  return c.json(getPublicConfig(c.env));
+});
 
 app.route('/api/auth', authRoutes);
 app.route('/api/attendance', attendanceRoutes);
@@ -57,7 +60,9 @@ app.get('/api/holidays/:year', authMiddleware, async (c) => {
   if (!/^\d{4}$/.test(yearText)) throw new RequestValidationError('年が正しくありません');
   const year = Number(yearText);
   if (year < 1955 || year > 2100) throw new RequestValidationError('年は1955から2100の間で指定してください');
-  return c.json(await getHolidayData(c.env, year));
+  const holidayData = await getHolidayData(c.env, year);
+  c.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
+  return c.json(holidayData);
 });
 
 app.notFound((c) => c.json({ error: 'API 不存在' }, 404));

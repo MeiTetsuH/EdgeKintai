@@ -2,12 +2,18 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#101419">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="勤怠表">
     <title>勤怠表</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="apple-touch-icon" href="/favicon.svg">
+    <link rel="manifest" href="/manifest.webmanifest">
     <link rel="stylesheet" href="/styles.css">
-    <script src="/excel.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
@@ -64,7 +70,7 @@
             </div>
             <div class="field">
               <label for="setup-password-confirm">パスワード（確認）</label>
-              <input id="setup-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+              <input id="setup-password-confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
             </div>
           </div>
           <button class="button button-primary button-wide" type="submit">管理者を作成して開始</button>
@@ -103,18 +109,22 @@
         <section id="page-today" class="page is-active" data-page-panel="today" aria-labelledby="today-title">
           <div class="today-hero-header">
             <div class="today-hero-main">
-              <p class="eyebrow">Today</p>
-              <h1 id="today-title">今日の勤務</h1>
+              <div class="today-hero-top-row">
+                <div class="today-hero-title-area">
+                  <p class="eyebrow">Today</p>
+                  <h1 id="today-title">今日の勤務</h1>
+                </div>
+                <div class="today-hero-clock-box" aria-label="現在の日本時間">
+                  <span class="live-clock-label">JST</span>
+                  <div class="live-clock">
+                    <time id="current-time">--:--:--</time>
+                  </div>
+                </div>
+              </div>
               <div class="today-hero-date-group">
                 <span id="today-date" class="today-hero-date">----</span>
                 <span id="today-weekday" class="today-hero-weekday"></span>
-                <span id="today-holiday" class="holiday-label"></span>
-              </div>
-            </div>
-            <div class="today-hero-clock-box" aria-label="現在の日本時間">
-              <span class="live-clock-label">CURRENT TIME (JST)</span>
-              <div class="live-clock">
-                <time id="current-time">--:--:--</time>
+                <span id="today-holiday" class="holiday-label" hidden></span>
               </div>
             </div>
           </div>
@@ -144,7 +154,10 @@
                     </select>
                   </div>
                   <div class="field" data-working-field>
-                    <label for="clock-in-time">打刻時刻</label>
+                    <div class="field-label-row">
+                      <label for="clock-in-time">打刻時刻</label>
+                      <button id="clock-time-now-btn" type="button" class="text-button-link">現在時刻</button>
+                    </div>
                     <div class="time-stepper-wrapper">
                       <input id="clock-in-time" name="clock_in" type="time" step="60" class="time-input">
                       <div class="time-stepper-btns">
@@ -155,7 +168,14 @@
                   </div>
                 </div>
                 <div class="field" data-working-field>
-                  <label for="clock-break">休憩（分）</label>
+                  <div class="field-label-row">
+                    <label for="clock-break">休憩（分）</label>
+                    <div class="preset-chips" data-preset-target="clock-break">
+                      <button type="button" class="chip-btn" data-value="0">0分</button>
+                      <button type="button" class="chip-btn" data-value="45">45分</button>
+                      <button type="button" class="chip-btn" data-value="60">60分</button>
+                    </div>
+                  </div>
                   <input id="clock-break" name="break_minutes" type="number" inputmode="numeric" min="0" max="480" step="1">
                 </div>
               </form>
@@ -196,6 +216,7 @@
               <button class="icon-button" type="button" data-month-target="calendar" data-month-delta="-1" aria-label="前月">‹</button>
               <input id="calendar-month" type="month" min="1955-01" max="2100-12" aria-label="表示月">
               <button class="icon-button" type="button" data-month-target="calendar" data-month-delta="1" aria-label="翌月">›</button>
+              <button id="calendar-month-current-btn" class="month-current-btn" type="button" data-month-current="calendar">今月</button>
             </div>
           </div>
           <div class="panel calendar-panel">
@@ -206,6 +227,15 @@
         </section>
 
         <section id="page-summary" class="page" data-page-panel="summary" aria-labelledby="summary-title" hidden>
+          <div class="print-report-header">
+            <h1 class="print-report-title">勤怠実績表</h1>
+            <div class="print-report-meta">
+              <span id="summary-print-month">対象月: ----年--月</span>
+              <span id="summary-print-user">氏名: --</span>
+              <span id="summary-print-generated">出力日時: ----/--/--</span>
+            </div>
+          </div>
+
           <div class="page-heading">
             <div>
               <p class="eyebrow">Monthly report</p>
@@ -215,6 +245,7 @@
               <button class="icon-button" type="button" data-month-target="summary" data-month-delta="-1" aria-label="前月">‹</button>
               <input id="summary-month" type="month" min="1955-01" max="2100-12" aria-label="集計月">
               <button class="icon-button" type="button" data-month-target="summary" data-month-delta="1" aria-label="翌月">›</button>
+              <button id="summary-month-current-btn" class="month-current-btn" type="button" data-month-current="summary">今月</button>
             </div>
           </div>
 
@@ -226,7 +257,18 @@
                 <p class="eyebrow">Details</p>
                 <h2>日別明細</h2>
               </div>
-              <button id="download-excel-button" class="button button-primary" type="button">Excelを作成</button>
+              <div class="button-row">
+                <button id="copy-summary-button" class="button button-sm button-secondary icon-only" type="button" aria-label="サマリーをコピー" title="サマリーをコピー（Slack / メール用）">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+                <button id="print-summary-button" class="button button-sm button-secondary icon-only" type="button" aria-label="印刷" title="印刷 / A4 PDF保存">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+                </button>
+                <button id="download-excel-button" class="button button-sm button-primary" type="button">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span>Excelを作成</span>
+                </button>
+              </div>
             </div>
             <div class="table-scroll">
               <table>
@@ -377,7 +419,7 @@
                 </div>
                 <div class="field">
                   <label for="new-password-confirm">新しいパスワード（確認）</label>
-                  <input id="new-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+                  <input id="new-password-confirm" name="new_password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
                 </div>
                 <button class="button" type="submit">パスワードを変更</button>
               </form>
@@ -395,6 +437,7 @@
               <button class="icon-button" type="button" data-month-target="admin" data-month-delta="-1" aria-label="前月">‹</button>
               <input id="admin-month" type="month" min="1955-01" max="2100-12" aria-label="管理対象月">
               <button class="icon-button" type="button" data-month-target="admin" data-month-delta="1" aria-label="翌月">›</button>
+              <button id="admin-month-current-btn" class="month-current-btn" type="button" data-month-current="admin">今月</button>
             </div>
           </div>
 
@@ -462,7 +505,14 @@
             </select>
           </div>
           <div class="field" data-record-working-field>
-            <label for="record-break">休憩（分）</label>
+            <div class="field-label-row">
+              <label for="record-break">休憩（分）</label>
+              <div class="preset-chips" data-preset-target="record-break">
+                <button type="button" class="chip-btn" data-value="0">0分</button>
+                <button type="button" class="chip-btn" data-value="45">45分</button>
+                <button type="button" class="chip-btn" data-value="60">60分</button>
+              </div>
+            </div>
             <input id="record-break" type="number" min="0" max="480" step="1">
           </div>
         </div>

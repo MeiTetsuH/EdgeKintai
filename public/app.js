@@ -103,7 +103,7 @@
     byId('logout-button').addEventListener('click', handleLogout);
     byId('theme-button').addEventListener('click', toggleTheme);
 
-    // Using event delegation for page navigation
+    // Using event delegation for page navigation and month control
     document.addEventListener('click', (event) => {
       const pageBtn = event.target.closest('[data-page]');
       if (pageBtn) {
@@ -115,6 +115,42 @@
         const target = deltaBtn.dataset.monthTarget;
         const delta = Number(deltaBtn.dataset.monthDelta);
         changeMonth(target, Number.isFinite(delta) ? delta : 0);
+        return;
+      }
+      const currentBtn = event.target.closest('[data-month-current]');
+      if (currentBtn) {
+        const target = currentBtn.dataset.monthCurrent;
+        const cur = currentMonthValue();
+        if (target === 'calendar') {
+          state.calendarMonth = cur;
+          byId('calendar-month').value = cur;
+          void loadCalendar(true);
+        } else if (target === 'summary') {
+          state.summaryMonth = cur;
+          byId('summary-month').value = cur;
+          updateExcelFilenamePreview();
+          void loadSummary(true);
+        } else if (target === 'admin') {
+          state.adminMonth = cur;
+          byId('admin-month').value = cur;
+          void loadAdminOverview();
+        }
+        hapticFeedback();
+        return;
+      }
+      const chip = event.target.closest('.chip-btn');
+      if (chip) {
+        const group = chip.closest('[data-preset-target]');
+        if (group) {
+          const targetId = group.dataset.presetTarget;
+          const targetInput = byId(targetId);
+          if (targetInput && !targetInput.disabled) {
+            targetInput.value = chip.dataset.value;
+            targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+            targetInput.dispatchEvent(new Event('change', { bubbles: true }));
+            hapticFeedback();
+          }
+        }
       }
     });
 
@@ -140,6 +176,10 @@
 
     byId('clock-work-type').addEventListener('change', updateClockForm);
     byId('clock-in-time').addEventListener('input', () => { clockTimeEdited = true; });
+    byId('clock-time-now-btn')?.addEventListener('click', () => {
+      resetClockActionTime();
+      hapticFeedback();
+    });
     byId('clock-in-form').addEventListener('submit', handleClockIn);
     byId('clock-out-button').addEventListener('click', handleClockOut);
     byId('edit-today-button').addEventListener('click', () => {
@@ -147,6 +187,17 @@
       void openRecordEditor(date);
     });
 
+    byId('copy-summary-button')?.addEventListener('click', handleCopySummary);
+    byId('print-summary-button')?.addEventListener('click', (event) => {
+      event.preventDefault();
+      byId('print-summary-button')?.blur();
+      window.setTimeout(() => {
+        window.print();
+      }, 60);
+    });
+    window.addEventListener('afterprint', () => {
+      byId('main-content')?.focus({ preventScroll: true });
+    });
     byId('download-excel-button').addEventListener('click', handleExcelDownload);
     byId('profile-form').addEventListener('submit', handleProfileUpdate);
     byId('profile-display-name').addEventListener('input', updateExcelFilenamePreview);
@@ -168,6 +219,36 @@
 
     byId('admin-add-user-form').addEventListener('submit', handleAdminAddUser);
     document.addEventListener('click', handleTimeStepper);
+    window.addEventListener('keydown', handleKeyboardShortcuts);
+  }
+
+  function handleKeyboardShortcuts(event) {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+    const dialog = byId('record-dialog');
+    if (dialog && dialog.open) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRecordDialog();
+      }
+      return;
+    }
+
+    if (event.key === '1') { event.preventDefault(); void navigate('today'); }
+    else if (event.key === '2') { event.preventDefault(); void navigate('calendar'); }
+    else if (event.key === '3') { event.preventDefault(); void navigate('summary'); }
+    else if (event.key === '4') { event.preventDefault(); void navigate('settings'); }
+    else if (event.key === '5' && state.user?.is_admin) { event.preventDefault(); void navigate('admin'); }
+  }
+
+  function hapticFeedback(pattern = 12) {
+    try {
+      if (typeof navigator.vibrate === 'function') {
+        navigator.vibrate(pattern);
+      }
+    } catch { /* ignore */ }
   }
 
   function handleTimeStepper(event) {
@@ -447,21 +528,92 @@
     };
   }
 
+  function createDayIcon(type) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'today-day-icon');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2.2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    if (type === 'holiday') {
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', '3');
+      rect.setAttribute('y', '4');
+      rect.setAttribute('width', '18');
+      rect.setAttribute('height', '18');
+      rect.setAttribute('rx', '2');
+      rect.setAttribute('ry', '2');
+      const l1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l1.setAttribute('x1', '16'); l1.setAttribute('y1', '2'); l1.setAttribute('x2', '16'); l1.setAttribute('y2', '6');
+      const l2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l2.setAttribute('x1', '8'); l2.setAttribute('y1', '2'); l2.setAttribute('x2', '8'); l2.setAttribute('y2', '6');
+      const l3 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l3.setAttribute('x1', '3'); l3.setAttribute('y1', '10'); l3.setAttribute('x2', '21'); l3.setAttribute('y2', '10');
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', '12'); circle.setAttribute('cy', '16'); circle.setAttribute('r', '2.2');
+      circle.setAttribute('fill', 'currentColor');
+      svg.append(rect, l1, l2, l3, circle);
+    } else {
+      const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p1.setAttribute('d', 'M18 8h1a4 4 0 0 1 0 8h-1');
+      const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p2.setAttribute('d', 'M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z');
+      const l1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l1.setAttribute('x1', '6'); l1.setAttribute('y1', '1'); l1.setAttribute('x2', '6'); l1.setAttribute('y2', '4');
+      const l2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l2.setAttribute('x1', '10'); l2.setAttribute('y1', '1'); l2.setAttribute('x2', '10'); l2.setAttribute('y2', '4');
+      const l3 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l3.setAttribute('x1', '14'); l3.setAttribute('y1', '1'); l3.setAttribute('x2', '14'); l3.setAttribute('y2', '4');
+      svg.append(p1, p2, l1, l2, l3);
+    }
+    return svg;
+  }
+
   function renderToday() {
     const today = state.today;
     const record = today.record;
     byId('today-date').textContent = formatJapaneseDate(today.date);
-    byId('today-weekday').textContent = `${WEEKDAYS[today.day_of_week] || ''}曜日`;
-    byId('today-holiday').textContent = today.holiday_name || (today.is_weekend ? '週末' : '');
 
-    byId('today-record-type').textContent = record?.persisted ? workTypeLabel(record.work_type) : '未設定';
+    const weekdayEl = byId('today-weekday');
+    const holidayEl = byId('today-holiday');
+
+    weekdayEl.textContent = `${WEEKDAYS[today.day_of_week] || ''}曜日`;
+    if (today.is_holiday) {
+      weekdayEl.dataset.type = 'holiday';
+    } else if (today.day_of_week === 0) {
+      weekdayEl.dataset.type = 'sunday';
+    } else if (today.day_of_week === 6) {
+      weekdayEl.dataset.type = 'saturday';
+    } else {
+      weekdayEl.dataset.type = 'workday';
+    }
+
+    holidayEl.replaceChildren();
+    if (today.is_holiday) {
+      holidayEl.dataset.type = 'holiday';
+      holidayEl.hidden = false;
+      const icon = createDayIcon('holiday');
+      const text = document.createElement('span');
+      text.textContent = today.holiday_name || '祝日';
+      holidayEl.append(icon, text);
+    } else {
+      holidayEl.dataset.type = '';
+      holidayEl.hidden = true;
+    }
+
+    byId('today-record-type').textContent = record?.persisted ? workTypeLabel(record.work_type) : '未定';
     byId('today-record-in').textContent = record?.clock_in || '--:--';
     byId('today-record-out').textContent = record?.clock_out || '--:--';
     byId('today-record-break').textContent = record?.persisted && isWorking(record.work_type)
       ? `${record.break_minutes}分`
       : '0分';
     byId('today-record-fare').textContent = money(record?.transport_fee || 0);
-    byId('today-record-work').textContent = formatMinutes(record?.work_minutes || 0);
+    renderTodayWorkTime(record);
     byId('today-record-transport-mode').textContent = record?.persisted && record.work_type === 'office'
       ? transportModeLabel(record.transport_mode)
       : '—';
@@ -487,6 +639,29 @@
     byId('clock-break').value = String(today.defaults.break_minutes);
     if (!record?.persisted) byId('clock-work-type').value = today.defaults.work_type;
     updateClockForm();
+  }
+
+  function renderTodayWorkTime(record) {
+    const container = byId('today-record-work');
+    if (!container) return;
+    const card = container.closest('div');
+    const existingPulse = card?.querySelector('.live-work-pulse');
+    if (record?.persisted && isWorking(record.work_type) && record.clock_in && !record.clock_out) {
+      const startMin = timeToMinutes(record.clock_in);
+      const currentMin = timeToMinutes(nowTime());
+      if (startMin !== null && currentMin !== null) {
+        let rawDiff = currentMin - startMin;
+        if (rawDiff < 0) rawDiff += 1440;
+        container.textContent = formatMinutes(rawDiff);
+        if (card && !existingPulse) {
+          const pulse = createElement('span', { className: 'live-work-pulse', ariaHidden: 'true' });
+          card.append(pulse);
+        }
+        return;
+      }
+    }
+    if (existingPulse) existingPulse.remove();
+    container.textContent = formatMinutes(record?.work_minutes || 0);
   }
 
   function updateClockForm() {
@@ -584,7 +759,7 @@
   }
 
   function renderCalendar(summary) {
-    const grid = byId('calendar-grid');
+      const grid = byId('calendar-grid');
     grid.replaceChildren();
     WEEKDAYS.forEach((day) => grid.append(createElement('div', { className: 'calendar-header', text: day })));
     const firstDay = new Date(Date.UTC(summary.year, summary.month - 1, 1)).getUTCDay();
@@ -607,18 +782,44 @@
       if (record.is_holiday) button.classList.add('is-holiday');
       if (record.day_of_week === 0) button.classList.add('is-sunday');
       if (record.day_of_week === 6) button.classList.add('is-saturday');
+      const isScheduled = record.day_of_week !== 0 && record.day_of_week !== 6 && !record.is_holiday;
+      const isPastNoClockOut = date <= today && record.persisted && isWorking(record.work_type) && record.clock_in && !record.clock_out;
+      const isPastMissing = date < today && !record.persisted && isScheduled;
+      const isTodayMissing = date === today && !record.persisted && isScheduled;
+      const isPastIncomplete = isPastNoClockOut || isPastMissing;
+      if (isPastIncomplete) button.classList.add('is-incomplete');
       button.append(createElement('span', { className: 'calendar-date', text: String(day) }));
-      if (record.persisted) {
+      if (isPastNoClockOut) {
+        const badge = createElement('span', { className: 'type-badge', text: '未退' });
+        badge.dataset.type = 'incomplete-no-out';
+        button.append(badge);
+      } else if (isPastMissing) {
+        const badge = createElement('span', { className: 'type-badge', text: '未刻' });
+        badge.dataset.type = 'incomplete-missing';
+        button.append(badge);
+      } else if (isTodayMissing) {
+        const badge = createElement('span', { className: 'type-badge', text: '未定' });
+        badge.dataset.type = 'undecided';
+        button.append(badge);
+      } else if (record.persisted) {
         const badge = createElement('span', { className: 'type-badge', text: workTypeLabel(record.work_type) });
         badge.dataset.type = record.work_type || 'unknown';
         button.append(badge);
-      } else if (record.is_holiday || record.day_of_week === 0 || record.day_of_week === 6) {
-        const badge = createElement('span', { className: 'type-badge', text: '休日' });
+      } else if (record.is_holiday) {
+        const badge = createElement('span', { className: 'type-badge holiday-badge' });
         badge.dataset.type = 'holiday';
+        const icon = createDayIcon('holiday');
+        const text = document.createElement('span');
+        text.textContent = record.holiday_name || '祝日';
+        badge.append(icon, text);
+        button.append(badge);
+      } else if (record.day_of_week === 0 || record.day_of_week === 6) {
+        const badge = createElement('span', { className: 'type-badge', text: '休日' });
+        badge.dataset.type = record.day_of_week === 6 ? 'saturday' : 'sunday';
         button.append(badge);
       }
       const note = record.persisted && record.clock_in
-        ? `${record.clock_in}–${record.clock_out || '未退勤'}`
+        ? `${record.clock_in}–${record.clock_out || '未退'}`
         : record.holiday_name;
       if (note) button.append(createElement('span', { className: 'calendar-note', text: note }));
       button.addEventListener('click', () => void openRecordEditor(date, summary));
@@ -655,15 +856,26 @@
   }
 
   function renderSummary(summary) {
+    const [year, month] = splitMonth(state.summaryMonth);
+    const monthText = `${year}年${String(month).padStart(2, '0')}月`;
+    const employeeName = state.user?.display_name || state.user?.username || '氏名未設定';
+    const printMonth = byId('summary-print-month');
+    const printUser = byId('summary-print-user');
+    const printGen = byId('summary-print-generated');
+    if (printMonth) printMonth.textContent = `対象月: ${monthText}`;
+    if (printUser) printUser.textContent = `氏名: ${employeeName}`;
+    if (printGen) printGen.textContent = `出力日時: ${formatDateTime(new Date())}`;
+
+    const scheduledWorkMinutes = (summary.scheduled_work_days || 0) * 8 * 60;
     const metrics = [
       ['出社', `${summary.office_days}日`],
       ['在宅', `${summary.remote_days}日`],
       ['有給', `${summary.paid_leave_days}日`],
       ['欠勤', `${summary.absent_days}日`],
+      ['所定労働', formatMinutes(scheduledWorkMinutes)],
       ['総実働', formatMinutes(summary.total_work_minutes)],
       ['会社基準超過', formatMinutes(summary.overtime_minutes)],
       ['交通費', money(summary.total_transport_fee)],
-      ['未完了', `${summary.incomplete_days}件`],
     ];
     const container = byId('summary-metrics');
     container.replaceChildren(...metrics.map(([label, value]) => {
@@ -672,18 +884,46 @@
       return card;
     }));
 
+    const today = todayIso();
     const body = byId('summary-table-body');
     body.replaceChildren();
     for (const record of summary.records) {
       const row = document.createElement('tr');
-      const typeLabel = record.persisted
-        ? workTypeLabel(record.work_type)
-        : (record.is_holiday || record.day_of_week === 0 || record.day_of_week === 6 ? '休日' : '');
+      const dateStr = record.work_date;
+      const isPastOrToday = dateStr <= today;
+      const isScheduled = record.day_of_week !== 0 && record.day_of_week !== 6 && !record.is_holiday;
+
+      const isMissingClockOut = record.persisted && isWorking(record.work_type) && isPastOrToday && (!record.clock_in || !record.clock_out);
+      const isPastMissing = !record.persisted && isScheduled && dateStr < today;
+      const isTodayMissing = !record.persisted && isScheduled && dateStr === today;
+      const isIncomplete = isMissingClockOut || isPastMissing;
+
+      if (isIncomplete) {
+        row.classList.add('is-incomplete-row');
+      }
+
+      let typeLabel = '';
+      if (record.persisted) {
+        typeLabel = workTypeLabel(record.work_type);
+      } else if (record.is_holiday) {
+        typeLabel = record.holiday_name ? `祝日(${record.holiday_name})` : '祝日';
+      } else if (record.day_of_week === 0 || record.day_of_week === 6) {
+        typeLabel = '休日';
+      } else if (isPastMissing) {
+        typeLabel = '未刻';
+      } else if (isTodayMissing) {
+        typeLabel = '未定';
+      }
+
+      const clockOutText = record.persisted
+        ? (record.clock_out || (isMissingClockOut ? '未退' : ''))
+        : '';
+
       const values = [
         `${Number(record.work_date.slice(8))}日（${WEEKDAYS[record.day_of_week] || ''}）`,
         typeLabel,
         record.persisted ? (record.clock_in || '') : '',
-        record.persisted ? (record.clock_out || '') : '',
+        clockOutText,
         record.persisted && isWorking(record.work_type) ? `${record.break_minutes}分` : '',
         record.persisted && record.work_minutes !== null ? formatMinutes(record.work_minutes) : '',
         record.persisted && record.work_type === 'office' ? transportModeLabel(record.transport_mode) : '',
@@ -719,10 +959,26 @@
     }
   }
 
+  let excelScriptLoading = null;
+  async function ensureExcelLibrary() {
+    if (window.KintaiExcel) return;
+    if (!excelScriptLoading) {
+      excelScriptLoading = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = '/excel.js';
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Excel出力モジュールの読み込みに失敗しました。'));
+        document.head.append(script);
+      });
+    }
+    await excelScriptLoading;
+  }
+
   async function handleExcelDownload() {
     const button = byId('download-excel-button');
     await withBusy(button, '作成中…', async () => {
       try {
+        await ensureExcelLibrary();
         const [year, month] = splitMonth(state.summaryMonth);
         const raw = await api(`/api/export/${year}/${month}`);
         const source = { ...unwrap(raw) };
@@ -736,11 +992,36 @@
         const blob = window.KintaiExcel.createWorkbookBlob(source, { config: state.config });
         const filename = window.KintaiExcel.filenameFor(source);
         downloadBlob(blob, filename);
+        hapticFeedback();
         toast('Excelを作成しました。', 'success');
       } catch (error) {
         handleAuthenticatedError(error, 'Excelを作成できませんでした。');
       }
     });
+  }
+
+  async function handleCopySummary() {
+    if (!state.summary) return;
+    const s = state.summary;
+    const [year, month] = splitMonth(state.summaryMonth);
+    const name = state.user?.display_name || state.user?.username || '氏名未設定';
+    const lines = [
+      `【${year}年${String(month).padStart(2, '0')}月 勤怠概要】`,
+      `氏名：${name}`,
+      `出社：${s.office_days}日 / 在宅：${s.remote_days}日 / 有給：${s.paid_leave_days}日 / 欠勤：${s.absent_days}日`,
+      `総実働時間：${formatMinutes(s.total_work_minutes)}（基準超過残業：${formatMinutes(s.overtime_minutes)}）`,
+      `交通費合計：${money(s.total_transport_fee)}`,
+    ];
+    if (s.incomplete_days > 0) {
+      lines.push(`※未完了の記録が ${s.incomplete_days} 件あります`);
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      hapticFeedback();
+      toast('勤怠サマリーをクリップボードにコピーしました。', 'success');
+    } catch {
+      toast('クリップボードへのコピーに失敗しました。', 'error');
+    }
   }
 
   async function handleProfileUpdate(event) {
@@ -1187,10 +1468,14 @@
     state.monthCache.set(valid, loadPromise);
     try {
       const summary = await loadPromise;
-      state.monthCache.set(valid, summary);
+      if (state.monthCache.get(valid) === loadPromise) {
+        state.monthCache.set(valid, summary);
+      }
       return summary;
     } catch (error) {
-      state.monthCache.delete(valid);
+      if (state.monthCache.get(valid) === loadPromise) {
+        state.monthCache.delete(valid);
+      }
       throw error;
     }
   }
@@ -1302,7 +1587,8 @@
         const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         const record = records.find((item) => item.work_date === date);
         const dow = weekdayIndex(date);
-        if (dow !== 0 && dow !== 6 && !record?.is_holiday) result.scheduled_work_days += 1;
+        const isHoliday = record ? record.is_holiday : false;
+        if (dow !== 0 && dow !== 6 && !isHoliday) result.scheduled_work_days += 1;
       }
     }
     return result;
@@ -1379,14 +1665,14 @@
 
   async function withBusy(button, label, operation) {
     if (!button || button.disabled) return;
-    const original = button.textContent;
+    const original = button.innerHTML;
     button.disabled = true;
     button.textContent = label;
     try {
       return await operation();
     } finally {
       button.disabled = false;
-      button.textContent = original;
+      button.innerHTML = original;
     }
   }
 
@@ -1639,6 +1925,12 @@
     const tick = () => {
       const parts = dateTimeParts();
       byId('current-time').textContent = `${parts.hour}:${parts.minute}:${parts.second}`;
+      if (state.today?.record && state.page === 'today') {
+        const rec = state.today.record;
+        if (rec.persisted && rec.clock_in && !rec.clock_out) {
+          renderTodayWorkTime(rec);
+        }
+      }
     };
     tick();
     if (state.clockTimer) window.clearInterval(state.clockTimer);
