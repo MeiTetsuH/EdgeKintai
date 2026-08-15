@@ -183,9 +183,10 @@
     byId('clock-in-form').addEventListener('submit', handleClockIn);
     byId('clock-out-button').addEventListener('click', handleClockOut);
     byId('edit-today-button').addEventListener('click', () => {
-      const date = state.today?.date || todayIso();
-      void openRecordEditor(date);
+      void openRecordEditor(todayIso());
     });
+
+    byId('apply-default-times-button')?.addEventListener('click', handleApplyDefaultTimes);
 
     byId('copy-summary-button')?.addEventListener('click', handleCopySummary);
     byId('print-summary-button')?.addEventListener('click', (event) => {
@@ -197,6 +198,14 @@
     });
     window.addEventListener('afterprint', () => {
       byId('main-content')?.focus({ preventScroll: true });
+    });
+    window.addEventListener('pageshow', () => {
+      void handlePotentialDateRollover();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        void handlePotentialDateRollover();
+      }
     });
     byId('download-excel-button').addEventListener('click', handleExcelDownload);
     byId('profile-form').addEventListener('submit', handleProfileUpdate);
@@ -516,6 +525,10 @@
         is_holiday: source.is_holiday,
         holiday_name: source.holiday_name,
       }) : null,
+      active_record: source.active_record ? normalizeRecord(source.active_record, {
+        date: source.active_record.work_date,
+        day_of_week: weekdayIndex(source.active_record.work_date),
+      }) : null,
       defaults: {
         break_minutes: boundedInteger(defaults.break_minutes, state.config.default_break_minutes, 0, 480),
         work_type: workingType(defaults.work_type) || userWorkType(),
@@ -577,6 +590,7 @@
   function renderToday() {
     const today = state.today;
     const record = today.record;
+    const activeRecord = today.active_record;
     byId('today-date').textContent = formatJapaneseDate(today.date);
 
     const weekdayEl = byId('today-weekday');
@@ -621,22 +635,77 @@
       ? commuteRouteLabel(record.transport_origin, record.transport_destination)
       : '—';
 
+    const todayState = attendanceState(
+      record || normalizeRecord({}, {
+        date: today.date,
+        day_of_week: today.day_of_week,
+        is_holiday: today.is_holiday,
+        holiday_name: today.holiday_name,
+      }),
+      today.date,
+      today.date,
+    );
+
     const badge = byId('today-record-badge');
     let status = 'empty';
-    let label = '未打刻';
-    if (record?.persisted && record.clock_in && !record.clock_out) {
-      status = 'working';
-      label = '勤務中';
-    } else if (record?.persisted) {
-      status = 'done';
-      label = record.clock_out || !isWorking(record.work_type) ? '記録済み' : '未完了';
+    let label = '未定';
+
+    const noticeEl = byId('today-active-shift-notice');
+    if (noticeEl) {
+      noticeEl.hidden = true;
+      noticeEl.textContent = '';
+      noticeEl.className = 'notice';
     }
+
+    if (activeRecord) {
+      if (activeRecord.work_date === today.date) {
+        status = 'working';
+        label = '勤務中';
+        byId('clock-out-button').disabled = false;
+        byId('clock-in-button').disabled = true;
+      } else if (activeRecord.work_date === previousDate(today.date)) {
+        status = 'working';
+        label = '勤務中（前日）';
+        byId('clock-out-button').disabled = false;
+        byId('clock-in-button').disabled = true;
+        if (noticeEl) {
+          noticeEl.hidden = false;
+          noticeEl.className = 'notice notice-info';
+          noticeEl.textContent = `前日（${formatJapaneseDate(activeRecord.work_date)}）${activeRecord.clock_in} から勤務中です。退勤すると前日の勤務記録に保存されます。`;
+        }
+      }
+    } else {
+      byId('clock-out-button').disabled = true;
+      byId('clock-in-button').disabled = Boolean(record?.clock_in || (record?.persisted && !isWorking(record.work_type)));
+      if (todayState === 'undecided') {
+        status = 'empty';
+        label = '未定';
+      } else if (record?.persisted) {
+        status = 'done';
+        label = '記録済み';
+      } else if (today.is_holiday) {
+        status = 'holiday';
+        label = today.holiday_name || '祝日';
+      } else if (today.day_of_week === 0 || today.day_of_week === 6) {
+        status = 'weekend';
+        label = '休日';
+      } else {
+        status = 'empty';
+        label = '未定';
+      }
+    }
+
     badge.dataset.status = status;
     badge.textContent = label;
 
-    byId('clock-out-button').disabled = !(record?.clock_in && !record.clock_out);
-    byId('clock-in-button').disabled = Boolean(record?.clock_in || (record?.persisted && !isWorking(record.work_type)));
-    byId('clock-break').value = String(today.defaults.break_minutes);
+    const punchRecord = activeRecord || (
+      record?.persisted && isWorking(record.work_type) && !record.clock_out
+        ? record
+        : null
+    );
+    byId('clock-break').value = String(
+      punchRecord?.break_minutes ?? today.defaults.break_minutes
+    );
     if (!record?.persisted) byId('clock-work-type').value = today.defaults.work_type;
     updateClockForm();
   }
@@ -676,7 +745,7 @@
 
   function updateRecordFarePreview() {
     const type = normalizeWorkType(byId('record-work-type').value);
-    const fare = type === 'office' ? integerInput(byId('record-one-way-fare'), 0, 0, 100000) : 0;
+    const fare = type === 'office' ? boundedInteger(byId('record-one-way-fare').value, 0, 0, 100000) : 0;
     const tripVal = byId('record-trip-type').value;
     const multiplier = tripVal === 'round_trip' ? 2 : (tripVal === 'one_way' ? 1 : 0);
     byId('record-fare-preview').textContent = money(fare * multiplier);
@@ -690,7 +759,24 @@
       return;
     }
 
-    const date = state.today?.date || todayIso();
+    let breakMinutes = userBreakMinutes();
+    if (isWorking(type)) {
+      try {
+        breakMinutes = readIntegerInput(byId('clock-break'), '休憩時間', 0, 480);
+      } catch (err) {
+        if (err instanceof InputValidationError) {
+          toast(err.message, 'error');
+          return;
+        }
+        throw err;
+      }
+    }
+
+    const date = todayIso();
+    if (state.today?.date !== date) {
+      await loadToday();
+    }
+
     await withBusy(event.submitter, '記録中…', async () => {
       try {
         if (!isWorking(type)) {
@@ -703,7 +789,7 @@
           const body = {
             work_type: type,
             clock_in: clockIn,
-            break_minutes: integerInput(byId('clock-break'), userBreakMinutes(), 0, 480),
+            break_minutes: breakMinutes,
             transport_one_way_fee: type === 'office' ? userOneWayFare() : 0,
             transport_trip_type: type === 'office' ? userTripType() : 'one_way',
             transport_mode: type === 'office' ? userTransportMode() : 'rail',
@@ -712,7 +798,7 @@
           };
           await api('/api/attendance/clock-in', { method: 'POST', body });
         }
-        invalidateMonth(date.slice(0, 7));
+        state.monthCache.clear();
         await loadToday();
         resetClockActionTime();
         toast('勤務を記録しました。', 'success');
@@ -725,14 +811,29 @@
 
   async function handleClockOut() {
     const clockOut = clockActionTime();
+
+    let breakMinutes;
+    try {
+      breakMinutes = readIntegerInput(byId('clock-break'), '休憩時間', 0, 480);
+    } catch (error) {
+      if (error instanceof InputValidationError) {
+        toast(error.message, 'error');
+        return;
+      }
+      throw error;
+    }
+
     if (!window.confirm(`${clockOut} で退勤を記録しますか？`)) return;
     await withBusy(byId('clock-out-button'), '記録中…', async () => {
       try {
         await api('/api/attendance/clock-out', {
           method: 'POST',
-          body: { clock_out: clockOut },
+          body: {
+            clock_out: clockOut,
+            break_minutes: breakMinutes,
+          },
         });
-        invalidateMonth((state.today?.date || todayIso()).slice(0, 7));
+        state.monthCache.clear();
         await loadToday();
         resetClockActionTime();
         toast('退勤を記録しました。', 'success');
@@ -759,7 +860,7 @@
   }
 
   function renderCalendar(summary) {
-      const grid = byId('calendar-grid');
+    const grid = byId('calendar-grid');
     grid.replaceChildren();
     WEEKDAYS.forEach((day) => grid.append(createElement('div', { className: 'calendar-header', text: day })));
     const firstDay = new Date(Date.UTC(summary.year, summary.month - 1, 1)).getUTCDay();
@@ -782,24 +883,29 @@
       if (record.is_holiday) button.classList.add('is-holiday');
       if (record.day_of_week === 0) button.classList.add('is-sunday');
       if (record.day_of_week === 6) button.classList.add('is-saturday');
-      const isScheduled = record.day_of_week !== 0 && record.day_of_week !== 6 && !record.is_holiday;
-      const isPastNoClockOut = date <= today && record.persisted && isWorking(record.work_type) && record.clock_in && !record.clock_out;
-      const isPastMissing = date < today && !record.persisted && isScheduled;
-      const isTodayMissing = date === today && !record.persisted && isScheduled;
-      const isPastIncomplete = isPastNoClockOut || isPastMissing;
-      if (isPastIncomplete) button.classList.add('is-incomplete');
+
+      const stateType = attendanceState(record, date, today);
+      if (stateType === 'incomplete' || stateType === 'missing') {
+        button.classList.add('is-incomplete');
+      }
+
       button.append(createElement('span', { className: 'calendar-date', text: String(day) }));
-      if (isPastNoClockOut) {
+
+      if (stateType === 'incomplete') {
         const badge = createElement('span', { className: 'type-badge', text: '未退' });
         badge.dataset.type = 'incomplete-no-out';
         button.append(badge);
-      } else if (isPastMissing) {
+      } else if (stateType === 'missing') {
         const badge = createElement('span', { className: 'type-badge', text: '未刻' });
         badge.dataset.type = 'incomplete-missing';
         button.append(badge);
-      } else if (isTodayMissing) {
+      } else if (stateType === 'undecided') {
         const badge = createElement('span', { className: 'type-badge', text: '未定' });
         badge.dataset.type = 'undecided';
+        button.append(badge);
+      } else if (stateType === 'active') {
+        const badge = createElement('span', { className: 'type-badge', text: '勤務中' });
+        badge.dataset.type = 'working';
         button.append(badge);
       } else if (record.persisted) {
         const badge = createElement('span', { className: 'type-badge', text: workTypeLabel(record.work_type) });
@@ -818,8 +924,9 @@
         badge.dataset.type = record.day_of_week === 6 ? 'saturday' : 'sunday';
         button.append(badge);
       }
+
       const note = record.persisted && record.clock_in
-        ? `${record.clock_in}–${record.clock_out || '未退'}`
+        ? `${record.clock_in}–${record.clock_out || (stateType === 'active' ? '勤務中' : '未退')}`
         : record.holiday_name;
       if (note) button.append(createElement('span', { className: 'calendar-note', text: note }));
       button.addEventListener('click', () => void openRecordEditor(date, summary));
@@ -866,13 +973,12 @@
     if (printUser) printUser.textContent = `氏名: ${employeeName}`;
     if (printGen) printGen.textContent = `出力日時: ${formatDateTime(new Date())}`;
 
-    const scheduledWorkMinutes = (summary.scheduled_work_days || 0) * 8 * 60;
     const metrics = [
       ['出社', `${summary.office_days}日`],
       ['在宅', `${summary.remote_days}日`],
       ['有給', `${summary.paid_leave_days}日`],
       ['欠勤', `${summary.absent_days}日`],
-      ['所定労働', formatMinutes(scheduledWorkMinutes)],
+      ['所定勤務日数', `${summary.scheduled_work_days || 0}日`],
       ['総実働', formatMinutes(summary.total_work_minutes)],
       ['会社基準超過', formatMinutes(summary.overtime_minutes)],
       ['交通費', money(summary.total_transport_fee)],
@@ -890,34 +996,35 @@
     for (const record of summary.records) {
       const row = document.createElement('tr');
       const dateStr = record.work_date;
-      const isPastOrToday = dateStr <= today;
-      const isScheduled = record.day_of_week !== 0 && record.day_of_week !== 6 && !record.is_holiday;
+      const stateType = attendanceState(record, dateStr, today);
 
-      const isMissingClockOut = record.persisted && isWorking(record.work_type) && isPastOrToday && (!record.clock_in || !record.clock_out);
-      const isPastMissing = !record.persisted && isScheduled && dateStr < today;
-      const isTodayMissing = !record.persisted && isScheduled && dateStr === today;
-      const isIncomplete = isMissingClockOut || isPastMissing;
-
-      if (isIncomplete) {
+      if (stateType === 'incomplete' || stateType === 'missing') {
         row.classList.add('is-incomplete-row');
       }
 
       let typeLabel = '';
-      if (record.persisted) {
+      if (stateType === 'missing') {
+        typeLabel = '未刻';
+      } else if (stateType === 'undecided') {
+        typeLabel = '未定';
+      } else if (record.persisted) {
         typeLabel = workTypeLabel(record.work_type);
       } else if (record.is_holiday) {
         typeLabel = record.holiday_name ? `祝日(${record.holiday_name})` : '祝日';
       } else if (record.day_of_week === 0 || record.day_of_week === 6) {
         typeLabel = '休日';
-      } else if (isPastMissing) {
-        typeLabel = '未刻';
-      } else if (isTodayMissing) {
-        typeLabel = '未定';
       }
 
-      const clockOutText = record.persisted
-        ? (record.clock_out || (isMissingClockOut ? '未退' : ''))
-        : '';
+      let clockOutText = '';
+      if (record.persisted) {
+        if (record.clock_out) {
+          clockOutText = record.clock_out;
+        } else if (stateType === 'active') {
+          clockOutText = '勤務中';
+        } else if (stateType === 'incomplete') {
+          clockOutText = '未退';
+        }
+      }
 
       const values = [
         `${Number(record.work_date.slice(8))}日（${WEEKDAYS[record.day_of_week] || ''}）`,
@@ -966,8 +1073,20 @@
       excelScriptLoading = new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = '/excel.js';
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error('Excel出力モジュールの読み込みに失敗しました。'));
+        script.onload = () => {
+          if (!window.KintaiExcel) {
+            script.remove();
+            excelScriptLoading = null;
+            reject(new Error('Excel出力モジュールの初期化に失敗しました。'));
+            return;
+          }
+          resolve();
+        };
+        script.onerror = () => {
+          script.remove();
+          excelScriptLoading = null;
+          reject(new Error('Excel出力モジュールの読み込みに失敗しました。'));
+        };
         document.head.append(script);
       });
     }
@@ -1009,7 +1128,7 @@
       `【${year}年${String(month).padStart(2, '0')}月 勤怠概要】`,
       `氏名：${name}`,
       `出社：${s.office_days}日 / 在宅：${s.remote_days}日 / 有給：${s.paid_leave_days}日 / 欠勤：${s.absent_days}日`,
-      `総実働時間：${formatMinutes(s.total_work_minutes)}（基準超過残業：${formatMinutes(s.overtime_minutes)}）`,
+      `総実働時間：${formatMinutes(s.total_work_minutes)}（会社基準超過：${formatMinutes(s.overtime_minutes)}）`,
       `交通費合計：${money(s.total_transport_fee)}`,
     ];
     if (s.incomplete_days > 0) {
@@ -1039,10 +1158,20 @@
 
   async function handleWorkDefaultsUpdate(event) {
     event.preventDefault();
+    let defaultBreakMinutes;
+    try {
+      defaultBreakMinutes = readIntegerInput(byId('profile-break'), '既定の休憩時間', 0, 480);
+    } catch (err) {
+      if (err instanceof InputValidationError) {
+        toast(err.message, 'error');
+        return;
+      }
+      throw err;
+    }
     const body = {
       default_clock_in: validTime(byId('profile-clock-in').value) || null,
       default_clock_out: validTime(byId('profile-clock-out').value) || null,
-      default_break_minutes: integerInput(byId('profile-break'), userBreakMinutes(), 0, 480),
+      default_break_minutes: defaultBreakMinutes,
       default_work_type: workingType(byId('profile-work-type').value) || 'office',
     };
     await saveProfileChanges(event.submitter, body, '勤務の既定値を保存しました。');
@@ -1050,8 +1179,21 @@
 
   async function handleCommuteUpdate(event) {
     event.preventDefault();
+    let defaultOneWayFare;
+    try {
+      defaultOneWayFare = readIntegerInput(byId('profile-one-way-fare'), '既定の片道運賃', 0, 100000, {
+        allowEmpty: true,
+        emptyValue: null,
+      });
+    } catch (err) {
+      if (err instanceof InputValidationError) {
+        toast(err.message, 'error');
+        return;
+      }
+      throw err;
+    }
     const body = {
-      default_one_way_fare: integerInput(byId('profile-one-way-fare'), state.config.default_one_way_fare, 0, 100000),
+      default_one_way_fare: defaultOneWayFare,
       default_trip_type: normalizeTripType(byId('profile-trip-type').value) || 'round_trip',
       default_transport_mode: normalizeTransportMode(byId('profile-transport-mode').value) || 'rail',
       default_transport_origin: commuteLocationInput(byId('profile-transport-origin')),
@@ -1139,17 +1281,43 @@
     }
   }
 
+  function updateDefaultTimesButton() {
+    const btn = byId('apply-default-times-button');
+    if (!btn) return;
+    const cin = userClockIn();
+    const cout = userClockOut();
+    if (cin && cout) {
+      btn.textContent = `既定時刻を適用（${cin}–${cout}）`;
+      btn.disabled = false;
+    } else if (cin || cout) {
+      btn.textContent = `既定時刻を適用（${cin || '--:--'}–${cout || '--:--'}）`;
+      btn.disabled = false;
+    } else {
+      btn.textContent = '既定時刻を適用';
+      btn.disabled = true;
+    }
+  }
+
+  function handleApplyDefaultTimes() {
+    const cin = userClockIn();
+    const cout = userClockOut();
+    if (cin) byId('record-clock-in').value = cin;
+    if (cout) byId('record-clock-out').value = cout;
+    hapticFeedback();
+  }
+
   function fillRecordDialog(record) {
     const defaultType = record.persisted
       ? (normalizeWorkType(record.work_type) || 'office')
       : (record.is_holiday || record.day_of_week === 0 || record.day_of_week === 6 ? 'holiday' : userWorkType());
     byId('record-date').value = record.work_date;
-    byId('record-date-context').textContent = `${formatJapaneseDate(record.work_date)}（${WEEKDAYS[record.day_of_week] || ''}）${record.holiday_name ? `　${record.holiday_name}` : ''}`;
+    byId('record-date-context').textContent = `${formatJapaneseDate(record.work_date)}（${WEEKDAYS[record.day_of_week] || ''}）${record.holiday_name ? `  ${record.holiday_name}` : ''}`;
     byId('record-work-type').value = defaultType;
-    byId('record-clock-in').value = record.persisted ? (record.clock_in || '') : userClockIn();
-    byId('record-clock-out').value = record.persisted ? (record.clock_out || '') : userClockOut();
+    byId('record-clock-in').value = record.persisted ? (record.clock_in || '') : '';
+    byId('record-clock-out').value = record.persisted ? (record.clock_out || '') : '';
+    updateDefaultTimesButton();
     byId('record-break').value = String(record.persisted ? record.break_minutes : userBreakMinutes());
-    byId('record-one-way-fare').value = String(record.persisted ? record.transport_one_way_fee : userOneWayFare());
+    byId('record-one-way-fare').value = String(record.persisted ? (record.transport_one_way_fee ?? '') : (userOneWayFare() ?? ''));
     byId('record-trip-type').value = record.persisted
       ? (normalizeTripType(record.transport_trip_type) || userTripType())
       : userTripType();
@@ -1176,7 +1344,7 @@
     const office = type === 'office';
     DOM.recordWorkingFields.forEach((field) => {
       field.hidden = !working;
-      field.querySelectorAll('input, select').forEach((input) => { input.disabled = !working; });
+      field.querySelectorAll('input, select, button').forEach((el) => { el.disabled = !working; });
     });
     DOM.recordOfficeFields.forEach((field) => {
       field.hidden = !office;
@@ -1197,15 +1365,16 @@
         );
         byId('record-clock-in').value = restoreOriginalWorkingRecord
           ? (originalRecord.clock_in || '')
-          : userClockIn();
+          : '';
         byId('record-clock-out').value = restoreOriginalWorkingRecord
           ? (originalRecord.clock_out || '')
-          : userClockOut();
+          : '';
+        updateDefaultTimesButton();
       }
       if (office && previousType && previousType !== 'office') {
         const restoreOriginalCommute = originalRecord?.persisted && originalRecord.work_type === 'office';
         byId('record-one-way-fare').value = String(
-          restoreOriginalCommute ? originalRecord.transport_one_way_fee : userOneWayFare(),
+          restoreOriginalCommute ? (originalRecord.transport_one_way_fee ?? '') : (userOneWayFare() ?? ''),
         );
         byId('record-trip-type').value = restoreOriginalCommute
           ? (normalizeTripType(originalRecord.transport_trip_type) || userTripType())
@@ -1248,14 +1417,30 @@
         toast('時刻を HH:MM 形式で入力してください。', 'error');
         return;
       }
+      let breakMinutes;
+      let oneWayFare = 0;
+      try {
+        breakMinutes = readIntegerInput(byId('record-break'), '休憩時間', 0, 480);
+        if (type === 'office') {
+          oneWayFare = readIntegerInput(byId('record-one-way-fare'), '片道運賃', 0, 100000, {
+            allowEmpty: true,
+            emptyValue: 0,
+          });
+        }
+      } catch (err) {
+        if (err instanceof InputValidationError) {
+          toast(err.message, 'error');
+          return;
+        }
+        throw err;
+      }
+
       body = {
         work_type: type,
         clock_in: clockIn,
         clock_out: clockOut,
-        break_minutes: integerInput(byId('record-break'), state.config.default_break_minutes, 0, 480),
-        transport_one_way_fee: type === 'office'
-          ? integerInput(byId('record-one-way-fare'), userOneWayFare(), 0, 100000)
-          : 0,
+        break_minutes: breakMinutes,
+        transport_one_way_fee: type === 'office' ? oneWayFare : 0,
         transport_trip_type: type === 'office'
           ? (normalizeTripType(byId('record-trip-type').value) || userTripType())
           : 'one_way',
@@ -1304,7 +1489,8 @@
 
   function closeRecordDialog() {
     const dialog = byId('record-dialog');
-    if (dialog.open) dialog.close();
+    dialog?.querySelector('.dialog-toast-region')?.replaceChildren();
+    if (dialog?.open) dialog.close();
     state.editorRecord = null;
   }
 
@@ -1677,7 +1863,9 @@
   }
 
   function toast(message, kind) {
-    const region = byId('toast-region');
+    const dialog = document.querySelector('dialog[open]');
+    const region = (dialog && dialog.querySelector('.dialog-toast-region')) || byId('toast-region');
+    if (!region) return;
     const item = createElement('div', { className: 'toast', text: safeString(message, 'エラーが発生しました。') });
     item.dataset.kind = kind === 'success' ? 'success' : (kind === 'error' ? 'error' : 'info');
     region.append(item);
@@ -1803,6 +1991,48 @@
     return value === 'office' || value === 'remote';
   }
 
+  function isScheduledDay(record) {
+    return record.day_of_week !== 0 && record.day_of_week !== 6 && !record.is_holiday;
+  }
+
+  function isWorkingRecord(record) {
+    return Boolean(record?.persisted && isWorking(record.work_type));
+  }
+
+  function isMissingPunch(record) {
+    return !record?.persisted || (isWorking(record.work_type) && !record.clock_in);
+  }
+
+  function isOpenShift(record) {
+    return Boolean(record?.persisted && isWorking(record.work_type) && record.clock_in && !record.clock_out);
+  }
+
+  function attendanceState(record, date, today) {
+    const scheduled = isScheduledDay(record);
+    const persistedWorking = Boolean(record?.persisted && isWorking(record.work_type));
+
+    const missingPunch =
+      (!record?.persisted && scheduled)
+      || (persistedWorking && !record.clock_in);
+
+    const openShift =
+      persistedWorking
+      && record.clock_in
+      && !record.clock_out;
+
+    if (date < today) {
+      if (missingPunch) return 'missing';
+      if (openShift) return 'incomplete';
+    }
+
+    if (date === today) {
+      if (missingPunch) return 'undecided';
+      if (openShift) return 'active';
+    }
+
+    return 'normal';
+  }
+
   function isPersistedRecord(record) {
     return Number(record.id) > 0 || Boolean(record.created_at) || Boolean(record.updated_at) ||
       Boolean(record.clock_in) || Boolean(record.clock_out) || Boolean(record.memo);
@@ -1868,6 +2098,14 @@
     return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
   }
 
+  function previousDate(value) {
+    const valid = validDate(value);
+    if (!valid) return '';
+    const [year, month, day] = valid.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day - 1));
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+  }
+
   let _dtfFull = null;
   let _dtfFullTz = null;
   function getDateTimePartsFormatter() {
@@ -1921,7 +2159,49 @@
     clockTimeEdited = false;
   }
 
+  let lastObservedDate = todayIso();
+
+  async function handlePotentialDateRollover() {
+    const currDate = todayIso();
+    if (currDate === lastObservedDate) {
+      return;
+    }
+    const prevDate = lastObservedDate;
+    lastObservedDate = currDate;
+    if (!state.user) {
+      return;
+    }
+
+    try {
+      const prevMonth = prevDate.slice(0, 7);
+      const currMonth = currDate.slice(0, 7);
+
+      state.monthCache.clear();
+      resetClockActionTime();
+
+      await loadToday();
+
+      if (
+        state.page === 'calendar'
+        && (state.calendarMonth === prevMonth || state.calendarMonth === currMonth)
+      ) {
+        await loadCalendar(true);
+      }
+
+      if (
+        state.page === 'summary'
+        && (state.summaryMonth === prevMonth || state.summaryMonth === currMonth)
+      ) {
+        await loadSummary(true);
+      }
+    } catch (error) {
+      lastObservedDate = prevDate;
+      throw error;
+    }
+  }
+
   function startClock() {
+    lastObservedDate = todayIso();
     const tick = () => {
       const parts = dateTimeParts();
       byId('current-time').textContent = `${parts.hour}:${parts.minute}:${parts.second}`;
@@ -1930,6 +2210,10 @@
         if (rec.persisted && rec.clock_in && !rec.clock_out) {
           renderTodayWorkTime(rec);
         }
+      }
+      const currentDate = todayIso();
+      if (currentDate !== lastObservedDate) {
+        void handlePotentialDateRollover();
       }
     };
     tick();
@@ -1971,14 +2255,29 @@
     return JPY_FORMATTER.format(amount);
   }
 
+  class InputValidationError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = 'InputValidationError';
+    }
+  }
+
   function boundedInteger(value, fallback, min, max) {
     const number = Number(value);
     return Number.isInteger(number) ? Math.min(max, Math.max(min, number)) : fallback;
   }
 
-  function integerInput(input, fallback, min, max) {
-    if (!input || String(input.value).trim() === '') return fallback;
-    return boundedInteger(input.value, fallback, min, max);
+  function readIntegerInput(input, label, min, max, { allowEmpty = false, emptyValue = null } = {}) {
+    const raw = String(input?.value ?? '').trim();
+    if (!raw) {
+      if (allowEmpty) return emptyValue;
+      throw new InputValidationError(`${label}を入力してください。`);
+    }
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new InputValidationError(`${label}は${min.toLocaleString()}〜${max.toLocaleString()}の範囲で入力してください。`);
+    }
+    return value;
   }
 
   function commuteLocationInput(input) {

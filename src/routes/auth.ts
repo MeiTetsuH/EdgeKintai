@@ -285,11 +285,11 @@ auth.post('/setup', async (c) => {
 auth.post('/login', async (c) => {
   const body = await readJsonObject(c.req.raw);
   assertOnlyKeys(body, ['username', 'password']);
-  const username = loginIdentifier(body.username, 'ログインID', 64);
+  const username = loginIdentifier(body.username, 'ログインID', 64).toLowerCase();
   const password = credentialString(body.password, 'パスワード', 128);
   const [addressAllowed, accountAllowed] = await Promise.all([
     checkRateLimit(c.env.AUTH_RATE_LIMITER, `login-ip:${clientAddress(c.req.raw)}`, c.req.raw),
-    checkRateLimit(c.env.AUTH_RATE_LIMITER, `login-account:${username.toLowerCase()}`, c.req.raw),
+    checkRateLimit(c.env.AUTH_RATE_LIMITER, `login-account:${username}`, c.req.raw),
   ]);
   if (!addressAllowed || !accountAllowed) {
     return c.json({ error: '試行回数が多すぎます。しばらくしてからもう一度お試しください' }, 429);

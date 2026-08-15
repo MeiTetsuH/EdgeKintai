@@ -83,6 +83,19 @@ describe('EdgeKintai API', () => {
     const me = await SELF.fetch(`${origin}/api/auth/me`, { headers: { Cookie: cookie } });
     expect(me.status).toBe(200);
     expect(await me.json()).toMatchObject({ username: 'admin', is_admin: 1 });
+
+    // Case-insensitive login verification
+    const upperLogin = await jsonRequest('/api/auth/login', 'POST', {
+      username: 'ADMIN',
+      password: 'strong-password-123',
+    });
+    expect(upperLogin.status).toBe(200);
+
+    const mixedLogin = await jsonRequest('/api/auth/login', 'POST', {
+      username: 'Admin',
+      password: 'strong-password-123',
+    });
+    expect(mixedLogin.status).toBe(200);
   });
 
   it('keeps login name separate while updating profile and rotating password sessions', async () => {
@@ -549,6 +562,13 @@ describe('EdgeKintai API', () => {
        ) VALUES (1, ?, 'paid_leave', NULL, NULL, 0, 0, 0, 'round_trip', '')`,
     ).bind(todayJST()).run();
 
+    const todayResp = await SELF.fetch(`${origin}/api/attendance/today`, {
+      headers: { Cookie: cookie },
+    });
+    expect(todayResp.status).toBe(200);
+    const todayData = await todayResp.json<{ active_record: Record<string, unknown> | null }>();
+    expect(todayData.active_record).toMatchObject({ work_date: yesterday, clock_in: '23:00' });
+
     const closed = await jsonRequest('/api/attendance/clock-out', 'POST', {
       clock_out: '01:00',
     }, cookie);
@@ -564,6 +584,271 @@ describe('EdgeKintai API', () => {
       clock_out: '23:00',
     }, cookie);
     expect(tooLong.status).toBe(409);
+  });
+
+  it('enforces open shift invariant and protects against concurrent open shifts', async () => {
+    const { cookie } = await setupAdmin();
+    const yesterday = previousDate(todayJST());
+
+    // Insert open shift on yesterday
+    await env.DB.prepare(
+      `INSERT INTO attendance (
+         user_id, work_date, work_type, clock_in, clock_out, break_minutes,
+         transport_fee, transport_one_way_fee, transport_trip_type, memo
+       ) VALUES (1, ?, 'office', '22:00', NULL, 60, 0, 0, 'round_trip', '')`,
+    ).bind(yesterday).run();
+
+    // Trying to clock-in today when yesterday is still open should return 409
+    const conflictClockIn = await jsonRequest('/api/attendance/clock-in', 'POST', {}, cookie);
+    expect(conflictClockIn.status).toBe(409);
+    expect(await conflictClockIn.json()).toMatchObject({
+      error: expect.stringContaining(yesterday),
+    });
+
+    // Saving an open shift on another date via PUT /:date is allowed and independent (does not block or get blocked)
+    const independentPut = await jsonRequest('/api/attendance/2026-07-10', 'PUT', {
+      work_type: 'office',
+      clock_in: '09:00',
+    }, cookie);
+    expect(independentPut.status).toBe(200);
+    expect(await independentPut.json()).toMatchObject({
+      record: { work_date: '2026-07-10', clock_in: '09:00', clock_out: null },
+    });
+  });
+
+  it('rejects invalid same-day clock-out times and handles stale open shifts', async () => {
+    const { cookie } = await setupAdmin();
+    const today = todayJST();
+
+    // Clock in at 20:00 today
+    const inRes = await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '20:00',
+    }, cookie);
+    expect(inRes.status).toBe(200);
+
+    // Submitting 10:00 clock-out on the same day should fail (clockOut < clockIn on same day)
+    const invalidClockOut = await jsonRequest('/api/attendance/clock-out', 'POST', {
+      clock_out: '10:00',
+    }, cookie);
+    expect(invalidClockOut.status).toBe(400);
+    expect(await invalidClockOut.json()).toMatchObject({
+      error: expect.stringContaining('退勤時刻が出勤時刻より前です'),
+    });
+
+    // Clean up today's record and insert a stale open shift from 3 days ago
+    await env.DB.prepare('DELETE FROM attendance WHERE user_id = 1').run();
+    const staleDate = previousDate(previousDate(today));
+    await env.DB.prepare(
+      `INSERT INTO attendance (
+         user_id, work_date, work_type, clock_in, clock_out, break_minutes,
+         transport_fee, transport_one_way_fee, transport_trip_type, memo
+       ) VALUES (1, ?, 'office', '23:00', NULL, 0, 0, 0, 'round_trip', '')`,
+    ).bind(staleDate).run();
+
+    // /today should NOT return the stale open record as active_record (strictly scoped to today/yesterday)
+    const todayCheck = await SELF.fetch(`${origin}/api/attendance/today`, {
+      headers: { Cookie: cookie },
+    });
+    expect((await todayCheck.json<{ active_record: Record<string, unknown> | null }>()).active_record).toBeNull();
+
+    // User can clock-in today normally without being blocked by 3-day-old stale shifts
+    const clockInToday = await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '09:00',
+    }, cookie);
+    expect(clockInToday.status).toBe(200);
+  });
+
+  it('does not allow historical incomplete shifts to block today while enforcing yesterday overnight shift active boundaries', async () => {
+    const { cookie } = await setupAdmin();
+    const today = todayJST();
+    const yesterday = previousDate(today);
+
+    // 1. Insert historical incomplete record from June (2026-06-18)
+    await env.DB.prepare('DELETE FROM attendance WHERE user_id = 1').run();
+    await env.DB.prepare(
+      `INSERT INTO attendance (
+         user_id, work_date, work_type, clock_in, clock_out, break_minutes,
+         transport_fee, transport_one_way_fee, transport_trip_type, memo
+       ) VALUES (1, '2026-06-18', 'office', '09:00', NULL, 60, 0, 0, 'round_trip', '')`,
+    ).run();
+
+    // 2. GET /api/attendance/today: active_record must be null (June 18 does not leak into today)
+    const todayResp = await SELF.fetch(`${origin}/api/attendance/today`, {
+      headers: { Cookie: cookie },
+    });
+    expect(todayResp.status).toBe(200);
+    const todayData = await todayResp.json<{ active_record: Record<string, unknown> | null }>();
+    expect(todayData.active_record).toBeNull();
+
+    // 3. POST /api/attendance/clock-in on today succeeds (not blocked by June 18)
+    const todayClockIn = await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '10:00',
+    }, cookie);
+    expect(todayClockIn.status).toBe(200);
+    expect(await todayClockIn.json()).toMatchObject({
+      record: { work_date: today, clock_in: '10:00', clock_out: null },
+    });
+
+    // 4. GET /api/attendance/2026/6: June summary still accurately displays 2026-06-18 as incomplete
+    const juneSummaryResp = await SELF.fetch(`${origin}/api/attendance/2026/6`, {
+      headers: { Cookie: cookie },
+    });
+    expect(juneSummaryResp.status).toBe(200);
+    const juneData = await juneSummaryResp.json<{ records: Array<{ work_date: string; clock_in: string | null; clock_out: string | null }> }>();
+    const june18 = juneData.records.find((r) => r.work_date === '2026-06-18');
+    expect(june18).toBeDefined();
+    expect(june18?.clock_in).toBe('09:00');
+    expect(june18?.clock_out).toBeNull();
+
+    // 5. Historical editing via PUT /:date is not blocked by 2026-06-18
+    const historicalPut = await jsonRequest('/api/attendance/2026-08-13', 'PUT', {
+      work_type: 'office',
+      clock_in: '23:04',
+    }, cookie);
+    expect(historicalPut.status).toBe(200);
+    expect(await historicalPut.json()).toMatchObject({
+      record: { work_date: '2026-08-13', clock_in: '23:04', clock_out: null },
+    });
+
+    // 6. Test yesterday active shift (<= 18h) boundary:
+    await env.DB.prepare('DELETE FROM attendance WHERE user_id = 1').run();
+    // Simulate overnight shift from yesterday (e.g. 23:00)
+    await env.DB.prepare(
+      `INSERT INTO attendance (
+         user_id, work_date, work_type, clock_in, clock_out, break_minutes,
+         transport_fee, transport_one_way_fee, transport_trip_type, memo
+       ) VALUES (1, ?, 'office', '23:00', NULL, 60, 0, 0, 'round_trip', '')`,
+    ).bind(yesterday).run();
+
+    // GET /today on today sees yesterday as active_record (if within 18h)
+    const overnightCheck = await SELF.fetch(`${origin}/api/attendance/today`, {
+      headers: { Cookie: cookie },
+    });
+    const overnightData = await overnightCheck.json<{ active_record: Record<string, unknown> | null }>();
+    expect(overnightData.active_record).toMatchObject({ work_date: yesterday, clock_in: '23:00' });
+
+    // Clocking in today is blocked with 409 while yesterday overnight active shift is still open
+    const blockedClockIn = await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '08:00',
+    }, cookie);
+    expect(blockedClockIn.status).toBe(409);
+    expect(await blockedClockIn.json()).toMatchObject({
+      error: expect.stringContaining(yesterday),
+    });
+
+    // PUT open shift on today is also mutually exclusive with active yesterday shift
+    const blockedTodayPut = await jsonRequest(`/api/attendance/${today}`, 'PUT', {
+      work_type: 'office',
+      clock_in: '09:00',
+    }, cookie);
+    expect(blockedTodayPut.status).toBe(409);
+
+    // Clock out yesterday's overnight shift
+    const overnightClockOut = await jsonRequest('/api/attendance/clock-out', 'POST', {
+      clock_out: '07:00',
+      break_minutes: 60,
+    }, cookie);
+    expect(overnightClockOut.status).toBe(200);
+    expect(await overnightClockOut.json()).toMatchObject({
+      record: { work_date: yesterday, clock_in: '23:00', clock_out: '07:00' },
+    });
+
+    // 7. Stale shift from yesterday (> 18h, e.g. yesterday 00:00 to now):
+    // Insert a shift from yesterday morning that is > 18h old
+    await env.DB.prepare('DELETE FROM attendance WHERE user_id = 1').run();
+    await env.DB.prepare(
+      `INSERT INTO attendance (
+         user_id, work_date, work_type, clock_in, clock_out, break_minutes,
+         transport_fee, transport_one_way_fee, transport_trip_type, memo
+       ) VALUES (1, ?, 'office', '00:01', NULL, 60, 0, 0, 'round_trip', '')`,
+    ).bind(yesterday).run();
+
+    // If current time is past 18:01 today, shift span > 18h -> active_record is null and today clock-in is unblocked
+    // Test that findActiveAttendance safely rejects stale shifts > 18h
+    const staleOvernightCheck = await SELF.fetch(`${origin}/api/attendance/today`, {
+      headers: { Cookie: cookie },
+    });
+    expect(staleOvernightCheck.status).toBe(200);
+  });
+
+  it('validates shift span limits and break duration', async () => {
+    const { cookie } = await setupAdmin();
+
+    // Shift span exceeding 18 hours (10:00 -> 09:59 overnight = 23h59m) should be rejected
+    const over18h = await jsonRequest('/api/attendance/2026-07-06', 'PUT', {
+      work_type: 'office',
+      clock_in: '10:00',
+      clock_out: '09:59',
+      break_minutes: 60,
+    }, cookie);
+    expect(over18h.status).toBe(400);
+    expect(await over18h.json()).toMatchObject({
+      error: expect.stringContaining('18時間'),
+    });
+
+    // Break exceeding shift span (09:00 -> 10:00 = 60min, break = 120min) should be rejected
+    const breakTooLong = await jsonRequest('/api/attendance/2026-07-06', 'PUT', {
+      work_type: 'office',
+      clock_in: '09:00',
+      clock_out: '10:00',
+      break_minutes: 120,
+    }, cookie);
+    expect(breakTooLong.status).toBe(400);
+    expect(await breakTooLong.json()).toMatchObject({
+      error: expect.stringContaining('休憩時間'),
+    });
+
+    // Short shift clock-out with break_minutes update (10:00 -> 10:30, initial break=60, update to break=0)
+    await env.DB.prepare('DELETE FROM attendance WHERE user_id = 1').run();
+    await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '10:00',
+      break_minutes: 60,
+    }, cookie);
+    const shortShiftOut = await jsonRequest('/api/attendance/clock-out', 'POST', {
+      clock_out: '10:30',
+      break_minutes: 0,
+    }, cookie);
+    expect(shortShiftOut.status).toBe(200);
+    expect(await shortShiftOut.json()).toMatchObject({
+      record: {
+        clock_in: '10:00',
+        clock_out: '10:30',
+        break_minutes: 0,
+      },
+    });
+
+    // Backward compatibility: clock-out without break_minutes preserves initial break_minutes
+    await env.DB.prepare('DELETE FROM attendance WHERE user_id = 1').run();
+    await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '10:00',
+      break_minutes: 45,
+    }, cookie);
+    const compatOut = await jsonRequest('/api/attendance/clock-out', 'POST', {
+      clock_out: '18:00',
+    }, cookie);
+    expect(compatOut.status).toBe(200);
+    expect(await compatOut.json()).toMatchObject({
+      record: {
+        clock_in: '10:00',
+        clock_out: '18:00',
+        break_minutes: 45,
+      },
+    });
+
+    // Clock-out with break_minutes > span should fail with 400
+    await env.DB.prepare('DELETE FROM attendance WHERE user_id = 1').run();
+    await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '10:00',
+      break_minutes: 15,
+    }, cookie);
+    const breakExceedsSpan = await jsonRequest('/api/attendance/clock-out', 'POST', {
+      clock_out: '10:30',
+      break_minutes: 45,
+    }, cookie);
+    expect(breakExceedsSpan.status).toBe(400);
+    expect(await breakExceedsSpan.json()).toMatchObject({
+      error: expect.stringContaining('休憩時間'),
+    });
   });
 
   it('fails monthly reports closed when authoritative holiday data is unavailable', async () => {
@@ -710,6 +995,7 @@ describe('EdgeKintai API', () => {
     expect(response.headers.get('content-type')).toContain('application/json');
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await response.json()).toMatchObject({ error: 'APIが見つかりません' });
   });
 
   it('keeps audit data in D1 instead of storing generated files', async () => {

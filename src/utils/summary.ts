@@ -151,13 +151,13 @@ export function buildMonthlySummaryFromRecords(
             record.break_minutes,
           );
           totalWorkMinutes += workMinutes;
-        } else {
+        } else if (dateStr < asOfDate) {
           incompleteDays += 1;
         }
       }
       // paid_leave, holiday and absent are complete classifications without
       // requiring clock punches and never contribute worked minutes.
-    } else if (isScheduled && dateStr <= asOfDate) {
+    } else if (isScheduled && dateStr < asOfDate) {
       incompleteDays += 1;
     }
 

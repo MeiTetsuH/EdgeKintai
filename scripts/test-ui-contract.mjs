@@ -26,4 +26,17 @@ if (missingIds.length || duplicateIds.length) {
   ].filter(Boolean).join('\n'));
 }
 
-console.log(`UI contract OK (${referencedIds.size} referenced ids, ${htmlIds.size} HTML ids)`);
+// Regression guards
+if (app.includes('state.authenticated')) {
+  throw new Error('public/app.js must not use the nonexistent state.authenticated property');
+}
+
+if (/\bintegerInput\s*\(/.test(app)) {
+  throw new Error('Removed integerInput helper must not be referenced');
+}
+
+if (!/function\s+previousDate\s*\(/.test(app)) {
+  throw new Error('previousDate helper must be defined');
+}
+
+console.log(`UI contract OK (${referencedIds.size} referenced ids, ${htmlIds.size} HTML ids, regression guards passed)`);

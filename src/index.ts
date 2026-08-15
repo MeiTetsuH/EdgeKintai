@@ -65,7 +65,7 @@ app.get('/api/holidays/:year', authMiddleware, async (c) => {
   return c.json(holidayData);
 });
 
-app.notFound((c) => c.json({ error: 'API 不存在' }, 404));
+app.notFound((c) => c.json({ error: 'APIが見つかりません' }, 404));
 
 app.onError((error, c) => {
   if (error instanceof RequestValidationError) {

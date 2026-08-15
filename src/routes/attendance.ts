@@ -4,7 +4,7 @@ import type { Attendance, TransportMode, TransportTripType, WorkType } from '../
 import { getUserAttendanceDefaults, getUserCommuteDefaults } from '../utils/config';
 import { buildHolidayMap, getHolidayData } from '../utils/holidays';
 import { buildMonthlySummary } from '../utils/summary';
-import { nowTimeJST, previousDate, timeToMinutes, todayJST } from '../utils/time';
+import { MAX_SHIFT_MINUTES, nowTimeJST, previousDate, shiftSpanMinutes, timeToMinutes, todayJST } from '../utils/time';
 import {
   assertOnlyKeys,
   boundedInteger,
@@ -31,13 +31,33 @@ function isClockable(workType: WorkType): workType is 'office' | 'remote' {
   return workType === 'office' || workType === 'remote';
 }
 
+// Only today or yesterday can represent an active shift that can be clocked out in Today view.
+// Older incomplete records are historical anomalies displayed in their respective monthly calendar/summary
+// and must not block today's attendance.
+async function findActiveAttendance(db: D1Database, userId: number, today: string): Promise<Attendance | null> {
+  const yesterday = previousDate(today);
+  return db.prepare(
+    `SELECT * FROM attendance
+     WHERE user_id = ?
+       AND work_date IN (?, ?)
+       AND clock_in IS NOT NULL
+       AND clock_out IS NULL
+       AND work_type IN ('office', 'remote')
+     ORDER BY work_date DESC
+     LIMIT 1`,
+  )
+    .bind(userId, today, yesterday)
+    .first<Attendance>();
+}
+
 attendance.get('/today', async (c) => {
   const user = c.get('user');
   const date = todayJST();
-  const [record, holidayData] = await Promise.all([
+  const [record, activeRecord, holidayData] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?')
       .bind(user.id, date)
       .first<Attendance>(),
+    findActiveAttendance(c.env.DB, user.id, date),
     getHolidayData(c.env, Number(date.slice(0, 4))),
   ]);
   const holidayName = buildHolidayMap(holidayData.holidays).get(date) ?? null;
@@ -52,6 +72,7 @@ attendance.get('/today', async (c) => {
     holiday_name: holidayName,
     is_weekend: dayOfWeek === 0 || dayOfWeek === 6,
     record: record ?? null,
+    active_record: activeRecord ?? null,
     defaults: {
       break_minutes: attendanceDefaults.break_minutes,
       work_type: attendanceDefaults.work_type,
@@ -90,6 +111,11 @@ attendance.post('/clock-in', async (c) => {
   }
 
   const date = todayJST();
+  const existingOpen = await findActiveAttendance(c.env.DB, user.id, date);
+  if (existingOpen) {
+    return c.json({ error: `${existingOpen.work_date} の勤務がまだ退勤されていません。先に退勤または記録修正をしてください` }, 409);
+  }
+
   const clockIn = nullableTime(body.clock_in, '出勤時刻') ?? nowTimeJST();
   if (!clockIn) throw new RequestValidationError('出勤時刻は必須です');
 
@@ -174,51 +200,55 @@ attendance.post('/clock-out', async (c) => {
   const body: Record<string, unknown> = c.req.raw.body === null
     ? {}
     : await readJsonObject(c.req.raw);
-  assertOnlyKeys(body, ['clock_out']);
+  assertOnlyKeys(body, ['clock_out', 'break_minutes']);
   const clockOut = nullableTime(body.clock_out, '退勤時刻') ?? nowTimeJST();
   if (!clockOut) throw new RequestValidationError('退勤時刻は必須です');
   const date = todayJST();
-  const todayRecord = await c.env.DB.prepare(
-    'SELECT * FROM attendance WHERE user_id = ? AND work_date = ?',
-  )
-    .bind(user.id, date)
-    .first<Attendance>();
-  if (todayRecord?.clock_out) return c.json({ error: '今日はすでに退勤打刻済みです' }, 409);
 
-  let openRecord = todayRecord?.clock_in && !todayRecord.clock_out
-    && isClockable(todayRecord.work_type)
-    ? todayRecord
-    : null;
+  const openRecord = await findActiveAttendance(c.env.DB, user.id, date);
   if (!openRecord) {
-    openRecord = await c.env.DB.prepare(
-      `SELECT * FROM attendance
-       WHERE user_id = ? AND work_date = ?
-         AND clock_in IS NOT NULL AND clock_out IS NULL
-         AND work_type IN ('office', 'remote')
-       LIMIT 1`,
-    )
-      .bind(user.id, previousDate(date))
-      .first<Attendance>();
+    return c.json({ error: '先に出勤打刻をしてください' }, 400);
   }
 
-  if (!openRecord) return c.json({ error: '先に出勤打刻をしてください' }, 400);
-  if (
-    openRecord.work_date !== date
-    && openRecord.clock_in
-    && timeToMinutes(clockOut) >= timeToMinutes(openRecord.clock_in)
-  ) {
-    return c.json({ error: '前日の出勤から24時間を経過しています。打刻修正画面から修正してください' }, 409);
+  let breakMinutes = openRecord.break_minutes;
+  if (body.break_minutes !== undefined) {
+    breakMinutes = boundedInteger(body.break_minutes, '休憩（分）', 0, 480);
+  }
+
+  if (openRecord.work_date === date) {
+    if (openRecord.clock_in && timeToMinutes(clockOut) < timeToMinutes(openRecord.clock_in)) {
+      throw new RequestValidationError('退勤時刻が出勤時刻より前です。時刻を確認してください');
+    }
+  } else if (openRecord.work_date === previousDate(date)) {
+    if (
+      openRecord.clock_in
+      && timeToMinutes(clockOut) >= timeToMinutes(openRecord.clock_in)
+    ) {
+      return c.json({ error: '前日の出勤から24時間を経過しています。打刻修正画面から修正してください' }, 409);
+    }
+  } else {
+    return c.json({ error: `${openRecord.work_date} の未退勤記録が残っています。打刻修正画面から修正してください` }, 409);
+  }
+
+  if (openRecord.clock_in) {
+    const span = shiftSpanMinutes(openRecord.clock_in, clockOut);
+    if (span > MAX_SHIFT_MINUTES) {
+      throw new RequestValidationError('勤務時間が18時間を超えています。時刻を確認してください');
+    }
+    if (breakMinutes > span) {
+      throw new RequestValidationError('休憩時間は勤務時間を超えて指定できません');
+    }
   }
 
   const record = await c.env.DB.prepare(
     `UPDATE attendance
-     SET clock_out = ?, updated_at = datetime('now')
+     SET clock_out = ?, break_minutes = ?, updated_at = datetime('now')
      WHERE user_id = ? AND work_date = ?
        AND clock_in IS NOT NULL AND clock_out IS NULL
        AND work_type IN ('office', 'remote')
      RETURNING *`,
   )
-    .bind(clockOut, user.id, openRecord.work_date)
+    .bind(clockOut, breakMinutes, user.id, openRecord.work_date)
     .first<Attendance>();
 
   if (!record) return c.json({ error: '退勤記録が更新されました。画面を再読み込みしてください' }, 409);
@@ -295,6 +325,41 @@ attendance.put('/:date', async (c) => {
     if (clockIn === undefined) clockIn = existing?.clock_in ?? null;
     if (clockOut === undefined) clockOut = existing?.clock_out ?? null;
     if (!clockIn && clockOut) throw new RequestValidationError('退勤時刻を入力する前に出勤時刻を入力してください');
+
+    if (clockIn && clockOut) {
+      const span = shiftSpanMinutes(clockIn, clockOut);
+      if (span > MAX_SHIFT_MINUTES) {
+        throw new RequestValidationError('勤務時間が18時間を超えています。時刻を確認してください');
+      }
+      if (breakMinutes > span) {
+        throw new RequestValidationError('休憩時間は勤務時間を超えて指定できません');
+      }
+    } else if (clockIn && !clockOut) {
+      const today = todayJST();
+      const yesterday = previousDate(today);
+      // Mutual exclusion only applies within the active window (today / yesterday)
+      if (date === today || date === yesterday) {
+        const otherActive = await c.env.DB.prepare(
+          `SELECT work_date
+           FROM attendance
+           WHERE user_id = ?
+             AND work_date != ?
+             AND work_date IN (?, ?)
+             AND clock_in IS NOT NULL
+             AND clock_out IS NULL
+             AND work_type IN ('office', 'remote')
+           LIMIT 1`,
+        )
+          .bind(user.id, date, today, yesterday)
+          .first<{ work_date: string }>();
+
+        if (otherActive) {
+          return c.json({
+            error: `${otherActive.work_date} の勤務がまだ退勤されていません。先に退勤または記録修正をしてください`,
+          }, 409);
+        }
+      }
+    }
   } else {
     clockIn = null;
     clockOut = null;

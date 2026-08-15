@@ -7,11 +7,11 @@
     <meta name="theme-color" content="#101419">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="勤怠表">
     <title>勤怠表</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="apple-touch-icon" href="/favicon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="stylesheet" href="/styles.css">
     <script src="/app.js" defer></script>
@@ -36,7 +36,7 @@
         <form id="login-form" class="stack" novalidate>
           <div class="field">
             <label for="login-username">ログイン名</label>
-            <input id="login-username" name="username" type="text" autocomplete="username" maxlength="64" required>
+            <input id="login-username" name="username" type="text" autocomplete="username" maxlength="64" autocapitalize="none" autocorrect="off" spellcheck="false" required>
           </div>
           <div class="field">
             <label for="login-password">パスワード</label>
@@ -56,7 +56,7 @@
           <div class="field-grid">
             <div class="field">
               <label for="setup-username">ログイン名</label>
-              <input id="setup-username" name="username" type="text" autocomplete="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" required>
+              <input id="setup-username" name="username" type="text" autocomplete="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" autocapitalize="none" autocorrect="off" spellcheck="false" required>
             </div>
             <div class="field">
               <label for="setup-display-name">氏名</label>
@@ -137,6 +137,7 @@
                   <h2>打刻</h2>
                 </div>
               </div>
+              <div id="today-active-shift-notice" class="notice" hidden></div>
               <form id="clock-in-form" class="stack compact" novalidate>
                 <div class="button-row clock-action-row">
                   <button id="clock-in-button" class="button button-primary button-action" type="submit">出勤</button>
@@ -446,7 +447,7 @@
               <div class="panel-heading"><h2>ユーザー追加</h2></div>
               <form id="admin-add-user-form" class="stack compact" novalidate>
                 <div class="field-grid">
-                  <div class="field"><label for="admin-new-username">ログイン名</label><input id="admin-new-username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" required></div>
+                  <div class="field"><label for="admin-new-username">ログイン名</label><input id="admin-new-username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>
                   <div class="field"><label for="admin-new-name">氏名</label><input id="admin-new-name" type="text" maxlength="80" required></div>
                 </div>
                 <div class="field"><label for="admin-new-password">初期パスワード</label><input id="admin-new-password" type="password" minlength="12" maxlength="128" required></div>
@@ -518,7 +519,10 @@
         </div>
         <div class="field-grid" data-record-working-field>
           <div class="field">
-            <label for="record-clock-in">出勤</label>
+            <div class="field-label-row">
+              <label for="record-clock-in">出勤</label>
+              <button id="apply-default-times-button" type="button" class="text-button-link">既定時刻を適用</button>
+            </div>
             <div class="time-stepper-wrapper">
               <input id="record-clock-in" type="time" step="60" class="time-input">
               <div class="time-stepper-btns">
@@ -582,6 +586,7 @@
             <button class="button button-primary" type="submit">保存</button>
           </div>
         </div>
+        <div class="toast-region dialog-toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
       </form>
     </dialog>
 

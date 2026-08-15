@@ -37,12 +37,23 @@ export function minutesToHHMM(minutes: number): string {
   return `${hours}:${remainder}`;
 }
 
-/** Supports a shift ending after midnight, for example 22:00 -> 06:00. */
-export function calcWorkMinutes(clockIn: string, clockOut: string, breakMinutes: number): number {
+export const MAX_SHIFT_MINUTES = 18 * 60;
+
+/**
+ * Calculates total elapsed span in minutes between clockIn and clockOut.
+ * Supports a shift ending after midnight (e.g. 22:00 -> 06:00).
+ */
+export function shiftSpanMinutes(clockIn: string, clockOut: string): number {
   const inMinutes = timeToMinutes(clockIn);
   let outMinutes = timeToMinutes(clockOut);
   if (outMinutes < inMinutes) outMinutes += 24 * 60;
-  return Math.max(0, outMinutes - inMinutes - breakMinutes);
+  return outMinutes - inMinutes;
+}
+
+/** Supports a shift ending after midnight, for example 22:00 -> 06:00. */
+export function calcWorkMinutes(clockIn: string, clockOut: string, breakMinutes: number): number {
+  const span = shiftSpanMinutes(clockIn, clockOut);
+  return Math.max(0, span - breakMinutes);
 }
 
 export function dayOfWeek(date: string): number {
