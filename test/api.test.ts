@@ -1,10 +1,14 @@
 import { env, SELF } from 'cloudflare:test';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSession } from '../src/middleware/auth';
 import { previousDate, todayJST } from '../src/utils/time';
 
 const origin = 'https://example.test';
 const setupToken = 'test-setup-token-0123456789abcdef0123456789abcdef';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 async function jsonRequest(
   path: string,
@@ -547,6 +551,8 @@ describe('EdgeKintai API', () => {
   });
 
   it('closes a previous-day overnight shift without accepting a 24-hour shift', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-20T00:00:00Z')); // 09:00 JST
     const { cookie } = await setupAdmin();
     const yesterday = previousDate(todayJST());
     await env.DB.prepare(
@@ -659,6 +665,8 @@ describe('EdgeKintai API', () => {
   });
 
   it('does not allow historical incomplete shifts to block today while enforcing yesterday overnight shift active boundaries', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-20T00:00:00Z')); // 09:00 JST
     const { cookie } = await setupAdmin();
     const today = todayJST();
     const yesterday = previousDate(today);
@@ -763,12 +771,56 @@ describe('EdgeKintai API', () => {
        ) VALUES (1, ?, 'office', '00:01', NULL, 60, 0, 0, 'round_trip', '')`,
     ).bind(yesterday).run();
 
-    // If current time is past 18:01 today, shift span > 18h -> active_record is null and today clock-in is unblocked
-    // Test that findActiveAttendance safely rejects stale shifts > 18h
+    // The shift is 32h59m old: it is not eligible for ordinary clock-out,
+    // but it still blocks a second clock-in until Calendar correction.
     const staleOvernightCheck = await SELF.fetch(`${origin}/api/attendance/today`, {
       headers: { Cookie: cookie },
     });
     expect(staleOvernightCheck.status).toBe(200);
+    const staleData = await staleOvernightCheck.json<{
+      active_record: Record<string, unknown> | null;
+      stale_record: Record<string, unknown> | null;
+    }>();
+    expect(staleData.active_record).toBeNull();
+    expect(staleData.stale_record).toMatchObject({ work_date: yesterday, clock_in: '00:01' });
+
+    const blockedByStaleClockIn = await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '09:00',
+    }, cookie);
+    expect(blockedByStaleClockIn.status).toBe(409);
+    expect(await blockedByStaleClockIn.json()).toMatchObject({
+      error: expect.stringContaining('カレンダー'),
+    });
+
+    const blockedStaleClockOut = await jsonRequest('/api/attendance/clock-out', 'POST', {
+      clock_out: '09:00',
+    }, cookie);
+    expect(blockedStaleClockOut.status).toBe(409);
+    expect(await blockedStaleClockOut.json()).toMatchObject({
+      error: expect.stringContaining('カレンダー'),
+    });
+
+    const blockedTodayPutByStale = await jsonRequest(`/api/attendance/${today}`, 'PUT', {
+      work_type: 'office',
+      clock_in: '09:00',
+    }, cookie);
+    expect(blockedTodayPutByStale.status).toBe(409);
+    expect(await blockedTodayPutByStale.json()).toMatchObject({
+      error: expect.stringContaining('カレンダー'),
+    });
+
+    const correctedStaleRecord = await jsonRequest(`/api/attendance/${yesterday}`, 'PUT', {
+      work_type: 'office',
+      clock_in: '00:01',
+      clock_out: '18:00',
+      break_minutes: 60,
+    }, cookie);
+    expect(correctedStaleRecord.status).toBe(200);
+
+    const clockInAfterCorrection = await jsonRequest('/api/attendance/clock-in', 'POST', {
+      clock_in: '09:00',
+    }, cookie);
+    expect(clockInAfterCorrection.status).toBe(200);
   });
 
   it('validates shift span limits and break duration', async () => {

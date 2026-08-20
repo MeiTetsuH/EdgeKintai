@@ -1,6 +1,6 @@
 {
   "name": "edge-kintai",
-  "version": "2.3.2",
+  "version": "2.4.0",
   "description": "Cloudflare-native attendance tracker for Japan",
   "private": true,
   "license": "MIT",

@@ -11,45 +11,69 @@ interface TestHooks {
   previousDate: (value: string) => string;
   calculateWorkMinutes: (clockIn: string, clockOut: string, breakMinutes: number) => number;
   boundedInteger: (value: unknown, fallback: number, min: number, max: number) => number;
-  handlePotentialDateRollover: () => Promise<void>;
+  isStalePreviousDayRecord: (
+    record: { work_date: string; clock_in: string | null },
+    today: string,
+    currentTime: string,
+  ) => boolean;
+  loadToday: () => Promise<boolean>;
+  handlePotentialDateRollover: () => Promise<boolean>;
   getLastObservedDate: () => string;
   setLastObservedDate: (val: string) => void;
   setUser: (user: unknown) => void;
-  setLoadTodayMock: (fn: () => Promise<void>) => void;
+  setApiMock: (fn: (path: string) => Promise<unknown>) => void;
 }
 
-function loadFrontendHooks(customLoadToday?: () => Promise<void>): TestHooks {
+function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): TestHooks {
   const instrumented = appSource.replace(
     'void initialize();',
     `
-    if (customLoadToday) {
-      loadToday = customLoadToday;
+    if (customApi) {
+      api = customApi;
     }
     return {
       attendanceState,
       previousDate,
       calculateWorkMinutes,
       boundedInteger,
+      isStalePreviousDayRecord,
+      loadToday,
       handlePotentialDateRollover,
       getLastObservedDate: () => lastObservedDate,
       setLastObservedDate: (val) => { lastObservedDate = val; },
       setUser: (u) => { state.user = u; },
-      setLoadTodayMock: (fn) => { loadToday = fn; },
+      setApiMock: (fn) => { api = fn; },
     };
     `,
   );
 
-  const mockWindow = { matchMedia: () => ({ matches: false }) };
+  const createMockElement = () => {
+    const children: unknown[] = [];
+    return {
+      value: '',
+      dataset: {} as Record<string, string>,
+      children,
+      append: (...items: unknown[]) => children.push(...items),
+      appendChild: (item: unknown) => { children.push(item); return item; },
+      remove: () => {},
+      setAttribute: () => {},
+    };
+  };
+  const mockWindow = {
+    matchMedia: () => ({ matches: false }),
+    setTimeout: () => 0,
+  };
   const mockDoc = {
     documentElement: { dataset: {} },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: () => null,
-    getElementById: () => ({ value: '', append: () => {}, appendChild: () => {}, remove: () => {} }),
+    createElement: () => createMockElement(),
+    getElementById: () => createMockElement(),
   };
 
-  const fn = new Function('window', 'document', 'navigator', 'location', 'customLoadToday', `return ${instrumented}`);
-  const hooks = fn(mockWindow, mockDoc, { clipboard: {} }, { pathname: '/' }, customLoadToday) as TestHooks;
+  const fn = new Function('window', 'document', 'navigator', 'location', 'customApi', `return ${instrumented}`);
+  const hooks = fn(mockWindow, mockDoc, { clipboard: {} }, { pathname: '/' }, customApi) as TestHooks;
   if (!hooks) throw new Error('Failed to load frontend hooks from public/app.js');
   return hooks;
 }
@@ -184,24 +208,32 @@ describe('Frontend Pure State Logic', () => {
     expect(boundedInteger('abc', 42, 0, 100)).toBe(42);
   });
 
-  it('rolls back lastObservedDate when handlePotentialDateRollover fails so next event can retry', async () => {
+  it('moves a previous-day open shift to stale only after 18 hours', () => {
+    const { isStalePreviousDayRecord } = loadFrontendHooks();
+    const record = { work_date: '2026-08-14', clock_in: '15:00' };
+    expect(isStalePreviousDayRecord(record, '2026-08-15', '09:00')).toBe(false);
+    expect(isStalePreviousDayRecord(record, '2026-08-15', '09:01')).toBe(true);
+    expect(isStalePreviousDayRecord(record, '2026-08-14', '23:59')).toBe(false);
+  });
+
+  it('uses loadToday production failure semantics and retries a failed date rollover', async () => {
     let callCount = 0;
-    const hooks = loadFrontendHooks(async () => {
+    const hooks = loadFrontendHooks(async (path) => {
+      expect(path).toBe('/api/attendance/today');
       callCount++;
-      if (callCount === 1) {
-        throw new Error('Network timeout');
-      }
+      throw new Error('Network timeout');
     });
 
     hooks.setUser({ id: 1, name: 'Tester' });
-    hooks.setLastObservedDate('2026-08-14');
+    hooks.setLastObservedDate('2000-01-01');
 
-    // First attempt fails -> throws error and rolls back lastObservedDate to 2026-08-14
-    await expect(hooks.handlePotentialDateRollover()).rejects.toThrow('Network timeout');
-    expect(hooks.getLastObservedDate()).toBe('2026-08-14');
+    // Real loadToday catches the network error and reports false.
+    await expect(hooks.handlePotentialDateRollover()).resolves.toBe(false);
+    expect(hooks.getLastObservedDate()).toBe('2000-01-01');
 
-    // Next attempt succeeds -> lastObservedDate successfully transitions to current date
-    await expect(hooks.handlePotentialDateRollover()).resolves.toBeUndefined();
-    expect(hooks.getLastObservedDate()).not.toBe('2026-08-14');
+    // The rollback means the next lifecycle event retries the same request.
+    await expect(hooks.handlePotentialDateRollover()).resolves.toBe(false);
+    expect(hooks.getLastObservedDate()).toBe('2000-01-01');
+    expect(callCount).toBe(2);
   });
 });

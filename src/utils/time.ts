@@ -40,6 +40,34 @@ export function minutesToHHMM(minutes: number): string {
 export const MAX_SHIFT_MINUTES = 18 * 60;
 
 /**
+ * Calculates elapsed minutes from a dated clock-in to a dated current time.
+ * Invalid persisted values are treated as infinitely old so they cannot be
+ * exposed as an ordinary active shift.
+ */
+export function elapsedShiftMinutes(
+  workDate: string,
+  clockIn: string,
+  currentDate: string,
+  currentTime: string,
+): number {
+  if (
+    !isValidDate(workDate)
+    || !isValidTime(clockIn)
+    || !isValidDate(currentDate)
+    || !isValidTime(currentTime)
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const [startYear, startMonth, startDay] = workDate.split('-').map(Number);
+  const [endYear, endMonth, endDay] = currentDate.split('-').map(Number);
+  const startDateMinutes = Date.UTC(startYear, startMonth - 1, startDay) / 60_000;
+  const endDateMinutes = Date.UTC(endYear, endMonth - 1, endDay) / 60_000;
+  return endDateMinutes + timeToMinutes(currentTime)
+    - startDateMinutes - timeToMinutes(clockIn);
+}
+
+/**
  * Calculates total elapsed span in minutes between clockIn and clockOut.
  * Supports a shift ending after midnight (e.g. 22:00 -> 06:00).
  */
