@@ -16,6 +16,7 @@
     other: 'その他',
   });
   const WEEKDAYS = Object.freeze(['日', '月', '火', '水', '木', '金', '土']);
+  const MAX_SHIFT_MINUTES = 18 * 60;
   const DEFAULT_CONFIG = Object.freeze({
     timezone: 'Asia/Tokyo',
     default_break_minutes: 60,
@@ -497,8 +498,10 @@
       const raw = await api('/api/attendance/today');
       state.today = normalizeToday(raw);
       renderToday();
+      return true;
     } catch (error) {
       handleAuthenticatedError(error, '今日の記録を取得できませんでした。');
+      return false;
     }
   }
 
@@ -528,6 +531,10 @@
       active_record: source.active_record ? normalizeRecord(source.active_record, {
         date: source.active_record.work_date,
         day_of_week: weekdayIndex(source.active_record.work_date),
+      }) : null,
+      stale_record: source.stale_record ? normalizeRecord(source.stale_record, {
+        date: source.stale_record.work_date,
+        day_of_week: weekdayIndex(source.stale_record.work_date),
       }) : null,
       defaults: {
         break_minutes: boundedInteger(defaults.break_minutes, state.config.default_break_minutes, 0, 480),
@@ -591,6 +598,7 @@
     const today = state.today;
     const record = today.record;
     const activeRecord = today.active_record;
+    const staleRecord = today.stale_record;
     byId('today-date').textContent = formatJapaneseDate(today.date);
 
     const weekdayEl = byId('today-weekday');
@@ -657,7 +665,17 @@
       noticeEl.className = 'notice';
     }
 
-    if (activeRecord) {
+    if (staleRecord) {
+      status = 'incomplete';
+      label = '未退勤あり';
+      byId('clock-out-button').disabled = true;
+      byId('clock-in-button').disabled = true;
+      if (noticeEl) {
+        noticeEl.hidden = false;
+        noticeEl.className = 'notice notice-warning';
+        noticeEl.textContent = `前日（${formatJapaneseDate(staleRecord.work_date)}）${staleRecord.clock_in} の未退勤記録があります。カレンダーから記録を修正してください。`;
+      }
+    } else if (activeRecord) {
       if (activeRecord.work_date === today.date) {
         status = 'working';
         label = '勤務中';
@@ -850,12 +868,14 @@
     const requestedMonth = state.calendarMonth;
     try {
       const summary = await loadMonthData(requestedMonth, force);
-      if (version !== calendarRequestVersion || requestedMonth !== state.calendarMonth) return;
+      if (version !== calendarRequestVersion || requestedMonth !== state.calendarMonth) return true;
       state.calendarSummary = summary;
       renderCalendar(summary);
+      return true;
     } catch (error) {
-      if (version !== calendarRequestVersion) return;
+      if (version !== calendarRequestVersion) return true;
       handleAuthenticatedError(error, 'カレンダーを取得できませんでした。');
+      return false;
     }
   }
 
@@ -953,12 +973,14 @@
     const requestedMonth = state.summaryMonth;
     try {
       const summary = await loadMonthData(requestedMonth, force);
-      if (version !== summaryRequestVersion || requestedMonth !== state.summaryMonth) return;
+      if (version !== summaryRequestVersion || requestedMonth !== state.summaryMonth) return true;
       state.summary = summary;
       renderSummary(summary);
+      return true;
     } catch (error) {
-      if (version !== summaryRequestVersion) return;
+      if (version !== summaryRequestVersion) return true;
       handleAuthenticatedError(error, '月次集計を取得できませんでした。');
+      return false;
     }
   }
 
@@ -2053,6 +2075,19 @@
     return parts[0] * 60 + parts[1];
   }
 
+  function isStalePreviousDayRecord(record, today, currentTime) {
+    if (
+      !record?.clock_in
+      || record.work_date !== previousDate(today)
+    ) {
+      return false;
+    }
+    const start = timeToMinutes(record.clock_in);
+    const end = timeToMinutes(currentTime);
+    return start !== null && end !== null
+      && 1440 + end - start > MAX_SHIFT_MINUTES;
+  }
+
   function validTime(value) {
     const text = String(value || '');
     const match = /^(\d{2}):(\d{2})$/.exec(text);
@@ -2164,12 +2199,12 @@
   async function handlePotentialDateRollover() {
     const currDate = todayIso();
     if (currDate === lastObservedDate) {
-      return;
+      return true;
     }
     const prevDate = lastObservedDate;
     lastObservedDate = currDate;
     if (!state.user) {
-      return;
+      return true;
     }
 
     try {
@@ -2179,24 +2214,35 @@
       state.monthCache.clear();
       resetClockActionTime();
 
-      await loadToday();
+      if (!await loadToday()) {
+        lastObservedDate = prevDate;
+        return false;
+      }
 
       if (
         state.page === 'calendar'
         && (state.calendarMonth === prevMonth || state.calendarMonth === currMonth)
       ) {
-        await loadCalendar(true);
+        if (!await loadCalendar(true)) {
+          lastObservedDate = prevDate;
+          return false;
+        }
       }
 
       if (
         state.page === 'summary'
         && (state.summaryMonth === prevMonth || state.summaryMonth === currMonth)
       ) {
-        await loadSummary(true);
+        if (!await loadSummary(true)) {
+          lastObservedDate = prevDate;
+          return false;
+        }
       }
+      return true;
     } catch (error) {
       lastObservedDate = prevDate;
-      throw error;
+      handleAuthenticatedError(error, '日付変更後の記録を更新できませんでした。');
+      return false;
     }
   }
 
@@ -2205,6 +2251,15 @@
     const tick = () => {
       const parts = dateTimeParts();
       byId('current-time').textContent = `${parts.hour}:${parts.minute}:${parts.second}`;
+      const activeRecord = state.today?.active_record;
+      if (
+        activeRecord
+        && isStalePreviousDayRecord(activeRecord, state.today.date, `${parts.hour}:${parts.minute}`)
+      ) {
+        state.today.active_record = null;
+        state.today.stale_record = activeRecord;
+        if (state.page === 'today') renderToday();
+      }
       if (state.today?.record && state.page === 'today') {
         const rec = state.today.record;
         if (rec.persisted && rec.clock_in && !rec.clock_out) {

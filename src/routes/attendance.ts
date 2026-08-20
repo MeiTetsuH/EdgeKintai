@@ -4,7 +4,15 @@ import type { Attendance, TransportMode, TransportTripType, WorkType } from '../
 import { getUserAttendanceDefaults, getUserCommuteDefaults } from '../utils/config';
 import { buildHolidayMap, getHolidayData } from '../utils/holidays';
 import { buildMonthlySummary } from '../utils/summary';
-import { MAX_SHIFT_MINUTES, nowTimeJST, previousDate, shiftSpanMinutes, timeToMinutes, todayJST } from '../utils/time';
+import {
+  elapsedShiftMinutes,
+  MAX_SHIFT_MINUTES,
+  nowTimeJST,
+  previousDate,
+  shiftSpanMinutes,
+  timeToMinutes,
+  todayJST,
+} from '../utils/time';
 import {
   assertOnlyKeys,
   boundedInteger,
@@ -31,10 +39,9 @@ function isClockable(workType: WorkType): workType is 'office' | 'remote' {
   return workType === 'office' || workType === 'remote';
 }
 
-// Only today or yesterday can represent an active shift that can be clocked out in Today view.
-// Older incomplete records are historical anomalies displayed in their respective monthly calendar/summary
-// and must not block today's attendance.
-async function findActiveAttendance(db: D1Database, userId: number, today: string): Promise<Attendance | null> {
+// Only today or yesterday can affect Today view. Older incomplete records are
+// historical anomalies displayed in Calendar/Summary and must not block today.
+async function findRecentOpenAttendance(db: D1Database, userId: number, today: string): Promise<Attendance | null> {
   const yesterday = previousDate(today);
   return db.prepare(
     `SELECT * FROM attendance
@@ -50,16 +57,43 @@ async function findActiveAttendance(db: D1Database, userId: number, today: strin
     .first<Attendance>();
 }
 
+function isStaleRecentAttendance(
+  record: Pick<Attendance, 'work_date' | 'clock_in'> | null,
+  today: string,
+  currentTime: string,
+): boolean {
+  return Boolean(
+    record?.clock_in
+    && record.work_date === previousDate(today)
+    && elapsedShiftMinutes(record.work_date, record.clock_in, today, currentTime) > MAX_SHIFT_MINUTES,
+  );
+}
+
+function openAttendanceConflictMessage(
+  record: Pick<Attendance, 'work_date'>,
+  stale: boolean,
+): string {
+  return stale
+    ? `${record.work_date} の未退勤記録があります。カレンダーから記録を修正してください`
+    : `${record.work_date} の勤務がまだ退勤されていません。先に退勤または記録修正をしてください`;
+}
+
 attendance.get('/today', async (c) => {
   const user = c.get('user');
-  const date = todayJST();
-  const [record, activeRecord, holidayData] = await Promise.all([
+  const now = new Date();
+  const date = todayJST(now);
+  const currentTime = nowTimeJST(now);
+  const [record, recentOpenRecord, holidayData] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?')
       .bind(user.id, date)
       .first<Attendance>(),
-    findActiveAttendance(c.env.DB, user.id, date),
+    findRecentOpenAttendance(c.env.DB, user.id, date),
     getHolidayData(c.env, Number(date.slice(0, 4))),
   ]);
+  const staleRecord = isStaleRecentAttendance(recentOpenRecord, date, currentTime)
+    ? recentOpenRecord
+    : null;
+  const activeRecord = staleRecord ? null : recentOpenRecord;
   const holidayName = buildHolidayMap(holidayData.holidays).get(date) ?? null;
   const commuteDefaults = getUserCommuteDefaults(c.env, user);
   const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
@@ -73,6 +107,7 @@ attendance.get('/today', async (c) => {
     is_weekend: dayOfWeek === 0 || dayOfWeek === 6,
     record: record ?? null,
     active_record: activeRecord ?? null,
+    stale_record: staleRecord,
     defaults: {
       break_minutes: attendanceDefaults.break_minutes,
       work_type: attendanceDefaults.work_type,
@@ -110,13 +145,20 @@ attendance.post('/clock-in', async (c) => {
     throw new RequestValidationError('打刻は出社または在宅勤務のみ選択可能です');
   }
 
-  const date = todayJST();
-  const existingOpen = await findActiveAttendance(c.env.DB, user.id, date);
+  const now = new Date();
+  const date = todayJST(now);
+  const currentTime = nowTimeJST(now);
+  const existingOpen = await findRecentOpenAttendance(c.env.DB, user.id, date);
   if (existingOpen) {
-    return c.json({ error: `${existingOpen.work_date} の勤務がまだ退勤されていません。先に退勤または記録修正をしてください` }, 409);
+    return c.json({
+      error: openAttendanceConflictMessage(
+        existingOpen,
+        isStaleRecentAttendance(existingOpen, date, currentTime),
+      ),
+    }, 409);
   }
 
-  const clockIn = nullableTime(body.clock_in, '出勤時刻') ?? nowTimeJST();
+  const clockIn = nullableTime(body.clock_in, '出勤時刻') ?? currentTime;
   if (!clockIn) throw new RequestValidationError('出勤時刻は必須です');
 
   const defaults = getUserCommuteDefaults(c.env, user);
@@ -201,13 +243,18 @@ attendance.post('/clock-out', async (c) => {
     ? {}
     : await readJsonObject(c.req.raw);
   assertOnlyKeys(body, ['clock_out', 'break_minutes']);
-  const clockOut = nullableTime(body.clock_out, '退勤時刻') ?? nowTimeJST();
+  const now = new Date();
+  const clockOut = nullableTime(body.clock_out, '退勤時刻') ?? nowTimeJST(now);
   if (!clockOut) throw new RequestValidationError('退勤時刻は必須です');
-  const date = todayJST();
+  const date = todayJST(now);
+  const currentTime = nowTimeJST(now);
 
-  const openRecord = await findActiveAttendance(c.env.DB, user.id, date);
+  const openRecord = await findRecentOpenAttendance(c.env.DB, user.id, date);
   if (!openRecord) {
     return c.json({ error: '先に出勤打刻をしてください' }, 400);
+  }
+  if (isStaleRecentAttendance(openRecord, date, currentTime)) {
+    return c.json({ error: openAttendanceConflictMessage(openRecord, true) }, 409);
   }
 
   let breakMinutes = openRecord.break_minutes;
@@ -335,12 +382,14 @@ attendance.put('/:date', async (c) => {
         throw new RequestValidationError('休憩時間は勤務時間を超えて指定できません');
       }
     } else if (clockIn && !clockOut) {
-      const today = todayJST();
+      const now = new Date();
+      const today = todayJST(now);
+      const currentTime = nowTimeJST(now);
       const yesterday = previousDate(today);
       // Mutual exclusion only applies within the active window (today / yesterday)
       if (date === today || date === yesterday) {
         const otherActive = await c.env.DB.prepare(
-          `SELECT work_date
+          `SELECT work_date, clock_in
            FROM attendance
            WHERE user_id = ?
              AND work_date != ?
@@ -351,11 +400,14 @@ attendance.put('/:date', async (c) => {
            LIMIT 1`,
         )
           .bind(user.id, date, today, yesterday)
-          .first<{ work_date: string }>();
+          .first<Pick<Attendance, 'work_date' | 'clock_in'>>();
 
         if (otherActive) {
           return c.json({
-            error: `${otherActive.work_date} の勤務がまだ退勤されていません。先に退勤または記録修正をしてください`,
+            error: openAttendanceConflictMessage(
+              otherActive,
+              isStaleRecentAttendance(otherActive, today, currentTime),
+            ),
           }, 409);
         }
       }
