@@ -101,6 +101,7 @@ npm run dev
 | `DEFAULT_CLOCK_OUT` | `19:00` | 退勤時刻の初期値 |
 | `OVERTIME_THRESHOLD_HOURS` | `180` | 月次残業アラートの閾値（時間） |
 | `SESSION_TTL_SECONDS` | `604800` | セッション有効期間（秒、デフォルト 7 日） |
+| `HEALTH_PROBE_ALLOWED_ORIGINS` | 空 | `/health` をブラウザから読み取れる Origin（カンマ区切り） |
 
 ユーザーごとの設定が優先されます。日ごとの勤務・時刻・通勤経路・交通費は勤務カレンダーから個別に変更できます。
 
@@ -127,13 +128,15 @@ npm run dev
 └── package.json
 ```
 
-`wrangler.jsonc` の `run_worker_first: ["/api/*"]` により、`/api/*` だけが Worker を通過します。それ以外は Static Assets が直接返すので、Workers Free の動的リクエスト枠を節約できます。
+`wrangler.jsonc` の `run_worker_first: ["/api/*", "/health"]` により、API と公開死活監視だけが Worker を通過します。それ以外は Static Assets が直接返すので、Workers Free の動的リクエスト枠を節約できます。
+
+`GET /health` は D1 にアクセスしない軽量な死活監視です。ブラウザからの読み取りは `HEALTH_PROBE_ALLOWED_ORIGINS` に完全一致する Origin だけを CORS で許可します。D1 を含む準備状態の確認には、認証済みの `GET /api/health/ready` を使用します。
 
 ---
 
 ## 注意事項
 
-- **Free プラン適合**: Static Assets は無料・無制限。`/api/*` のみ Workers の 10 万リクエスト／日・CPU 10ms／回の対象です。D1 Free は 500MB／DB、読み取り 500 万行／日、書き込み 10 万行／日。
+- **Free プラン適合**: Static Assets は無料・無制限。`/api/*` と `/health` が Workers の 10 万リクエスト／日・CPU 10ms／回の対象です。D1 Free は 500MB／DB、読み取り 500 万行／日、書き込み 10 万行／日。
 - **セキュリティ**: Cookie は `HttpOnly; Secure; SameSite=Strict`。セッション token は SHA-256 ダイジェストのみ D1 に保存し、パスワード変更時は旧セッションを無効化します。
 - **プライバシー**: R2 は使用しません。氏名・駅名・勤務記録は D1 と、利用者が端末へダウンロードした Excel にのみ保存されます。
 - **バックアップ**: D1 Free は 7 日間の Time Travel がありますが、会社提出用データは別途バックアップを推奨します。
