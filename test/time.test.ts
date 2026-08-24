@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   calcWorkMinutes,
   dayOfWeek,
+  elapsedShiftMinutes,
   isValidDate,
   isValidTime,
   MAX_SHIFT_MINUTES,
@@ -37,6 +38,13 @@ describe('Japan time helpers', () => {
     expect(shiftSpanMinutes('10:00', '09:59')).toBe(1439);
     expect(shiftSpanMinutes('10:00', '09:59') > MAX_SHIFT_MINUTES).toBe(true);
     expect(shiftSpanMinutes('22:00', '06:00') <= MAX_SHIFT_MINUTES).toBe(true);
+  });
+
+  it('calculates date-aware elapsed shift time across midnight', () => {
+    expect(elapsedShiftMinutes('2026-08-14', '23:00', '2026-08-15', '07:00')).toBe(480);
+    expect(elapsedShiftMinutes('2026-08-14', '09:00', '2026-08-15', '20:00')).toBe(2_100);
+    expect(elapsedShiftMinutes('2026-08-15', '09:00', '2026-08-15', '20:00')).toBe(660);
+    expect(elapsedShiftMinutes('invalid', '09:00', '2026-08-15', '20:00')).toBe(Number.POSITIVE_INFINITY);
   });
 
   it('calculates weekdays without host-timezone drift', () => {
