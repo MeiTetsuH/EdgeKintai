@@ -75,12 +75,22 @@ describe('public health probe', () => {
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
 
-  it('does not add probe CORS headers to existing API health routes', async () => {
+  it('keeps probe CORS isolated and retires the duplicate API health route', async () => {
     const response = await SELF.fetch('https://example.test/api/health', {
       headers: { Origin: 'https://dashboard.example.test' },
     });
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(404);
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    await expect(response.json()).resolves.toEqual({ error: 'APIが見つかりません' });
+  });
+
+  it('keeps the D1 readiness probe authenticated and outside public CORS', async () => {
+    const response = await SELF.fetch('https://example.test/api/health/ready', {
+      headers: { Origin: 'https://dashboard.example.test' },
+    });
+
+    expect(response.status).toBe(401);
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
 });

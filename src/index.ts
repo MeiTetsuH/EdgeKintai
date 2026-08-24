@@ -65,8 +65,6 @@ app.use('/api/*', async (c, next) => {
   await next();
 });
 
-app.get('/api/health', (c) => c.json({ ok: true, service: 'edge-kintai' }));
-
 app.get('/health', (c) => c.json({ ok: true, service: 'edge-kintai' }));
 
 app.get('/api/health/ready', authMiddleware, async (c) => {

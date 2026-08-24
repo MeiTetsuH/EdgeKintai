@@ -130,7 +130,12 @@ npm run dev
 
 `wrangler.jsonc` の `run_worker_first: ["/api/*", "/health"]` により、API と公開死活監視だけが Worker を通過します。それ以外は Static Assets が直接返すので、Workers Free の動的リクエスト枠を節約できます。
 
-`GET /health` は D1 にアクセスしない軽量な死活監視です。ブラウザからの読み取りは `HEALTH_PROBE_ALLOWED_ORIGINS` に完全一致する Origin だけを CORS で許可します。D1 を含む準備状態の確認には、認証済みの `GET /api/health/ready` を使用します。
+### ヘルスチェック
+
+| エンドポイント | 認証 | 用途 |
+|---|---|---|
+| `GET /health` | 不要 | Worker の liveness。D1 にアクセスせず、`HEALTH_PROBE_ALLOWED_ORIGINS` と完全一致する Origin だけがブラウザから読み取り可能 |
+| `GET /api/health/ready` | 必要 | D1 を含む readiness |
 
 ---
 
