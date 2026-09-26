@@ -1,5 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
+
+// PRIVATE DEPLOYMENT OVERRIDE: test the real configured browser allowlist.
+const deploymentConfig = readFileSync(new URL('./wrangler.jsonc', import.meta.url), 'utf8');
+const privateProbeOrigins = deploymentConfig.match(/"HEALTH_PROBE_ALLOWED_ORIGINS"\s*:\s*"([^"]*)"/)?.[1];
+if (!privateProbeOrigins) throw new Error('Deployment health probe allowlist is missing');
 
 const migrations = await readD1Migrations('./migrations');
 
@@ -25,7 +31,7 @@ export default defineConfig({
           DEFAULT_CLOCK_OUT: '19:00',
           OVERTIME_THRESHOLD_HOURS: '180',
           SESSION_TTL_SECONDS: '604800',
-          HEALTH_PROBE_ALLOWED_ORIGINS: 'https://status.example.test,https://dashboard.example.test',
+          HEALTH_PROBE_ALLOWED_ORIGINS: `https://status.example.test,https://dashboard.example.test,${privateProbeOrigins}`,
           SETUP_TOKEN: 'test-setup-token-0123456789abcdef0123456789abcdef',
           TEST_MIGRATIONS: migrations,
         },

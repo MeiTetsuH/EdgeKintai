@@ -2,6 +2,9 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "worktime",
   "main": "src/index.ts",
+  "account_id": "94d1eb75f9d3646bc2406f67f923ead3",
+  "workers_dev": false,
+  "preview_urls": false,
   "compatibility_date": "2026-07-29",
   "compatibility_flags": ["nodejs_compat"],
 
