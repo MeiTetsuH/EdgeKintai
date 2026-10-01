@@ -266,12 +266,12 @@
           <details id="summary-extra" class="summary-extra"><summary>勤務区分・交通費の内訳</summary><div id="summary-extra-metrics" class="metric-grid"></div></details>
 
           <section class="panel">
-            <div class="panel-heading">
+            <div class="panel-heading summary-details-heading">
               <div>
                 <p class="eyebrow">Details</p>
                 <h2>日別明細</h2>
               </div>
-              <div class="button-row">
+              <div class="button-row summary-actions">
                 <label class="summary-filter"><input id="summary-incomplete-only" type="checkbox">要確認のみ</label>
                 <button id="copy-summary-button" class="button button-sm button-secondary icon-only" type="button" aria-label="サマリーをコピー" title="サマリーをコピー（Slack / メール用）">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
@@ -279,9 +279,10 @@
                 <button id="print-summary-button" class="button button-sm button-secondary icon-only" type="button" aria-label="印刷" title="印刷 / A4 PDF保存">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
                 </button>
-                <button id="download-excel-button" class="button button-sm button-primary" type="button">
+                <button id="download-excel-button" class="button button-sm button-primary" type="button" aria-label="Excelを作成" title="Excelを作成">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  <span>Excelを作成</span>
+                  <span class="excel-label-full" aria-hidden="true">Excelを作成</span>
+                  <span class="excel-label-compact" aria-hidden="true">Excel</span>
                 </button>
               </div>
             </div>
