@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.8.2 — 2026-10-01
+
+### Safari and mobile layout
+
+- Fix clipped month labels, including 10月, 11月 and 12月, by reserving space for the text, padding and dropdown chevron.
+- Give the year/month selectors the available row width instead of leaving large empty gaps around them. Keep all month controls on one row.
+- Spread the daily-details filter and actions across the available width, with larger buttons where space permits.
+- Retain compact padding and single-row controls on the narrowest screens, without reducing selector text below 16px.
+
+### Validation
+
+- Checked all twelve month labels, alignment and overlap in Chromium at 320–1280px, and in Mac Safari 27.0.1 at narrow widths from 320–430px.
+- This does not replace iPhone hardware verification. No database migration or deployment configuration changes are required.
+
 ## 2.8.1 — 2026-10-01
 
 ### Safari and mobile layout

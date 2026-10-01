@@ -1804,15 +1804,18 @@ tbody tr.is-incomplete-row td {
   .month-control {
     width: 100%;
     /* Mobile layout contract: previous, year/month, next and current month
-       share one row in calendar, summary and admin. Keep select text at 16px. */
+       share one row in calendar, summary and admin. Give spare width to the
+       selects, not blank space around them. Keep select text at 16px. */
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: 2.35rem minmax(0, 1fr) 2.35rem auto;
     align-items: center;
-    gap: 0.2rem;
+    gap: clamp(0.3rem, 1.5vw, 0.75rem);
   }
 
-  .month-select {
-    justify-content: center;
+  .month-control .month-select {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, 1.2fr) minmax(5rem, 1fr);
+    gap: 0.5rem;
   }
 
   .month-select select {
@@ -1823,27 +1826,29 @@ tbody tr.is-incomplete-row td {
   }
 
   .month-control .month-select select:first-child {
-    width: 5.9rem;
-    min-width: 5.9rem;
+    width: 100%;
+    min-width: 0;
   }
 
   .month-control .month-select select:last-child {
-    width: 4.1rem;
-    min-width: 4.1rem;
+    /* Reserve enough text space for 10月, 11月 and 12月 after padding and
+       the chevron. Element alignment alone does not detect clipped labels. */
+    width: 100%;
+    min-width: 0;
   }
 
   .month-control .icon-button {
-    width: 2rem;
+    width: 100%;
   }
 
   .month-control .month-current-btn {
-    padding: 0 0.4rem;
+    padding: 0 0.55rem;
   }
 
   /* A compact Excel label leaves room for the title, filter, copy and print
      without wrapping. Its accessible name retains the complete action. */
   .summary-details-heading {
-    gap: 0.35rem;
+    gap: 0.65rem;
   }
 
   .summary-details-heading h2 {
@@ -1851,7 +1856,11 @@ tbody tr.is-incomplete-row td {
   }
 
   .summary-actions {
-    gap: 0.2rem;
+    /* Spread actions through the available width instead of leaving a large
+       gap after the title and packing all the buttons against each other. */
+    flex: 1;
+    justify-content: space-between;
+    gap: clamp(0.3rem, 1.2vw, 0.6rem);
   }
 
   .summary-actions .summary-filter {
@@ -1875,8 +1884,8 @@ tbody tr.is-incomplete-row td {
   }
 
   .summary-actions .icon-only {
-    width: 2rem;
-    min-width: 2rem;
+    width: 2.35rem;
+    min-width: 2.35rem;
     padding: 0;
   }
 
@@ -2189,9 +2198,10 @@ tbody tr.is-incomplete-row td {
   }
 }
 
-/* Keep year/month labels legible at narrow widths and larger text sizes. */
-.month-select select:first-child { min-width: 6.5rem; }
-.month-select select:last-child { min-width: 4.8rem; }
+/* Include padding, chevron clearance and a little text margin in the minimum
+   width. Mobile grids override these minima with their own compact padding. */
+.month-select select:first-child { min-width: 7rem; }
+.month-select select:last-child { min-width: 5.5rem; }
 .data-status { display: flex; align-items: center; gap: .75rem; min-height: 2.5rem; color: var(--muted); font-size: .875rem; }
 .summary-primary-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .summary-extra { margin-bottom: 1.5rem; }
@@ -2205,7 +2215,41 @@ tbody tr.is-incomplete-row td {
   .summary-primary-metrics .metric-card { padding: .75rem .5rem; }
   .summary-primary-metrics .metric-card strong { font-size: 1.35rem; }
 }
+@media (max-width: 390px) {
+  .month-control {
+    grid-template-columns: 2rem minmax(0, 1fr) 2rem auto;
+  }
+  .summary-details-heading {
+    gap: 0.35rem;
+  }
+  .summary-actions .icon-only {
+    width: 2rem;
+    min-width: 2rem;
+  }
+}
 @media (max-width: 360px) {
+  /* Compact padding and buttons on small phones; keep enough text width for
+     two-digit months rather than clipping 月 to force the row to fit. */
+  .month-control {
+    grid-template-columns: 2rem minmax(0, 1fr) 2rem auto;
+    gap: 0.2rem;
+  }
+  .month-control .month-select {
+    grid-template-columns: minmax(5.8rem, 1.2fr) minmax(4.7rem, 1fr);
+    gap: 0.2rem;
+  }
+  .month-control .month-select select {
+    padding-left: 0.35rem;
+    padding-right: 1.2rem;
+    background-size: 0.8rem;
+    background-position: right 0.35rem center;
+  }
+  .month-control .month-current-btn {
+    padding: 0 0.4rem;
+  }
+  .summary-actions {
+    gap: 0.2rem;
+  }
   /* On the narrowest phones, use the named download icon rather than wrapping
      the toolbar or shrinking the year/month labels. */
   #download-excel-button {
