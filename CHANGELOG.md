@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.8.1 — 2026-10-01
+
+### Safari and mobile layout
+
+- Keep the previous-month button, year/month selectors, next-month button and current-month button on one row in the calendar, monthly report and administration pages.
+- Keep the daily-details title, incomplete-record filter, copy, print and Excel actions on one row without splitting the title.
+- Use a compact Excel label on phones and the download icon on the narrowest screens while retaining the full accessible action name.
+- Document the single-row layout convention in CSS comments and retain 16px year/month selector text.
+
+### Validation
+
+- Checked the changed layout in Mac Safari 27.0.1 at desktop and narrow widths, including 320, 375, 420 and 430px. This is not an iPhone hardware test.
+- No database migration or deployment configuration changes are required by this patch.
+
 ## 2.8.0 — 2026-09-26
 
 ### Attendance reliability

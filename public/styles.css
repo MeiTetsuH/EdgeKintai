@@ -850,6 +850,21 @@ textarea:focus {
   margin-bottom: 0.9rem;
 }
 
+/* Keep the details title and its actions on one line; do not squeeze the title
+   into broken words when adding actions to this toolbar. */
+.summary-details-heading > div:first-child {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.summary-actions {
+  flex-wrap: nowrap;
+}
+
+.excel-label-compact {
+  display: none;
+}
+
 .live-clock {
   display: flex;
   align-items: baseline;
@@ -1788,25 +1803,89 @@ tbody tr.is-incomplete-row td {
 
   .month-control {
     width: 100%;
-    display: flex;
-    flex-wrap: wrap;
+    /* Mobile layout contract: previous, year/month, next and current month
+       share one row in calendar, summary and admin. Keep select text at 16px. */
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.2rem;
   }
 
   .month-select {
-    flex: 0 0 auto;
+    justify-content: center;
   }
 
   .month-select select {
     flex: 0 0 auto;
+    padding-left: 0.5rem;
     padding-right: 1.6rem;
     background-position: right 0.45rem center;
   }
 
+  .month-control .month-select select:first-child {
+    width: 5.9rem;
+    min-width: 5.9rem;
+  }
+
+  .month-control .month-select select:last-child {
+    width: 4.1rem;
+    min-width: 4.1rem;
+  }
+
+  .month-control .icon-button {
+    width: 2rem;
+  }
+
   .month-control .month-current-btn {
+    padding: 0 0.4rem;
+  }
+
+  /* A compact Excel label leaves room for the title, filter, copy and print
+     without wrapping. Its accessible name retains the complete action. */
+  .summary-details-heading {
+    gap: 0.35rem;
+  }
+
+  .summary-details-heading h2 {
+    font-size: 0.9rem;
+  }
+
+  .summary-actions {
+    gap: 0.2rem;
+  }
+
+  .summary-actions .summary-filter {
+    gap: 0.2rem;
+    font-size: 0.75rem;
+  }
+
+  .summary-actions .summary-filter input {
+    width: 0.9rem;
+    height: 0.9rem;
+    margin: 0;
     flex-shrink: 0;
-    padding: 0 0.65rem;
+  }
+
+  .summary-actions .button {
+    height: 2.35rem;
+    padding: 0 0.35rem;
+    gap: 0.2rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .summary-actions .icon-only {
+    width: 2rem;
+    min-width: 2rem;
+    padding: 0;
+  }
+
+  .excel-label-full {
+    display: none;
+  }
+
+  .excel-label-compact {
+    display: inline;
   }
 
   .calendar-day,
@@ -2121,19 +2200,22 @@ tbody tr.is-incomplete-row td {
 .summary-filter input { width: 1.1rem; height: 1.1rem; min-height: 0; }
 .record-conflict { padding: 1rem; border: 1px solid var(--primary); border-radius: .75rem; margin-bottom: 1rem; }
 @media (max-width: 420px) {
-  .month-control {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: .4rem;
-  }
-  .month-control .month-select { grid-column: 1 / -1; grid-row: 1; justify-content: center; }
-  .month-control .icon-button:first-child { grid-column: 1; grid-row: 2; }
-  .month-control .icon-button:nth-of-type(2) { grid-column: 3; grid-row: 2; }
-  .month-control .month-current-btn { grid-column: 2; grid-row: 2; justify-self: center; }
   .summary-primary-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-primary-metrics .metric-card:first-child { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
   .summary-primary-metrics .metric-card { padding: .75rem .5rem; }
   .summary-primary-metrics .metric-card strong { font-size: 1.35rem; }
+}
+@media (max-width: 360px) {
+  /* On the narrowest phones, use the named download icon rather than wrapping
+     the toolbar or shrinking the year/month labels. */
+  #download-excel-button {
+    width: 2rem;
+    min-width: 2rem;
+    padding: 0;
+  }
+  .excel-label-compact {
+    display: none;
+  }
 }
 @media print {
   .data-status, .summary-filter, .summary-extra > summary { display: none !important; }
