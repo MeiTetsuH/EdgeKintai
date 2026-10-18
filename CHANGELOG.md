@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.9.0 — 2026-10-18
+
+- Consolidate the current database schema into `migrations/001_schema.sql`.
+- Preserve existing data through a verified baseline adoption step in the npm migration and deployment commands. Unknown or incomplete legacy schemas stop before changes; finish their old migrations first.
+- Cover existing database upgrades, baseline adoption, repeated migrations and deletion audits with regression tests.
+- Harden attendance updates, stale-edit handling and monthly record requests.
+- Update the development-only `brace-expansion` dependency to 5.0.12 to resolve security advisories.
+- Simplify the README and deployment instructions.
+
 ## 2.8.2 — 2026-10-01
 
 ### Safari and mobile layout

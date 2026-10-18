@@ -98,10 +98,10 @@ function readConfiguration() {
     ? readdirSync(migrationsPath).filter((name) => name.endsWith('.sql')).sort()
     : [];
   if (
-    migrationFiles[0] !== '0001_schema.sql'
-    || migrationFiles.some((name, index) => !new RegExp(`^${String(index + 1).padStart(4, '0')}_[a-z0-9_]+\\.sql$`).test(name))
+    migrationFiles[0] !== '001_schema.sql'
+    || migrationFiles.some((name, index) => !new RegExp(`^${String(index + 1).padStart(3, '0')}_[a-z0-9_]+\\.sql$`).test(name))
   ) {
-    throw new Error('Migrations must start with 0001_schema.sql and use consecutive numbered SQL files');
+    throw new Error('Migrations must start with 001_schema.sql and use consecutive numbered SQL files');
   }
 
   if (/"cpu_ms"\s*:/.test(source)) {
@@ -374,8 +374,8 @@ function main() {
 
   runInherited(
     '5/7 应用远程 D1 migrations',
-    wranglerExecutable,
-    ['d1', 'migrations', 'apply', 'DB', '--remote'],
+    process.execPath,
+    [join(projectRoot, 'scripts', 'migrate-database.mjs'), '--remote', '--env-file', safeEnvFile],
   );
 
   heading('6/7 检查首次设置 Secret');
