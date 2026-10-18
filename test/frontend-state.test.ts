@@ -73,10 +73,14 @@ interface TestHooks {
   setUser: (user: unknown) => void;
   setToday: (today: unknown) => void;
   setPage: (page: string) => void;
-  setApiMock: (fn: (path: string) => Promise<unknown>) => void;
+  setAdminMonth: (month: string) => void;
+  handleClockIn: (event: { preventDefault: () => void; submitter?: null }) => Promise<void>;
+  setApiMock: (fn: (path: string, options?: Record<string, unknown>) => Promise<unknown>) => void;
 }
 
-function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): TestHooks {
+function loadFrontendHooks(
+  customApi?: (path: string, options?: Record<string, unknown>) => Promise<unknown>,
+): TestHooks {
   const instrumented = appSource.replace(
     'void initialize();',
     `
@@ -101,6 +105,7 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
       hasUnsavedRecord,
       getCopied: () => navigator.copied,
       setSummaryMonth: (m) => { state.summaryMonth = m; },
+      setAdminMonth: (m) => { state.adminMonth = m; },
       setClockEdited: (v) => { clockTimeEdited = v; },
       setEditor: (v) => { state.editorRecord = v; editorSnapshot = recordDraftSnapshot(); },
       attendanceState,
@@ -109,6 +114,7 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
       boundedInteger,
       isStalePreviousDayRecord,
       loadToday,
+      handleClockIn,
       handlePotentialDateRollover,
       withBusy,
       loadMonthData,
@@ -729,4 +735,40 @@ it('prints the full report and restores collapsed details and the screen filter'
   hooks.restoreSummaryPrint();
   expect(hooks.getElement('summary-extra').open).toBe(false);
   expect(hooks.getElement('summary-incomplete-only').checked).toBe(true);
+});
+
+it('preserves an existing memo when recording a non-working day from the Today panel', async () => {
+  let savedBody: Record<string, unknown> | undefined;
+  let savedHeaders: Record<string, string> | undefined;
+  const hooks = loadFrontendHooks(async (_path, options) => {
+    if (options?.method === 'PUT') {
+      savedBody = options.body as Record<string, unknown>;
+      savedHeaders = options.headers as Record<string, string>;
+      return { record: { id: 12, revision: 4, work_date: '2026-10-18', work_type: 'paid_leave', memo: '通院のため' } };
+    }
+    return {
+      date: '2026-10-18',
+      record: { id: 12, revision: 3, persisted: true, work_date: '2026-10-18', work_type: 'office', memo: '通院のため' },
+    };
+  });
+  await hooks.loadToday();
+  hooks.getElement('clock-work-type').value = 'paid_leave';
+  await hooks.handleClockIn({ preventDefault: () => {}, submitter: null });
+  expect(savedBody).toMatchObject({ work_type: 'paid_leave', memo: '通院のため' });
+  expect(savedHeaders).toEqual({ 'If-Match': '"12:3"' });
+});
+
+it('refreshes the admin overview when a date rollover happens on the admin page', async () => {
+  const requested: string[] = [];
+  const hooks = loadFrontendHooks(async (path) => {
+    requested.push(path);
+    if (path === '/api/attendance/today') return { date: '2026-10-18', record: null };
+    return { year: 2026, month: 10, users: [] };
+  });
+  hooks.setUser({ id: 1, is_admin: true });
+  hooks.setPage('admin');
+  hooks.setAdminMonth('2026-10');
+  hooks.setLastObservedDate('2026-10-01');
+  await expect(hooks.handlePotentialDateRollover()).resolves.toBe(true);
+  expect(requested).toEqual(['/api/attendance/today', '/api/admin/overview/2026/10']);
 });

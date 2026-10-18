@@ -34,6 +34,7 @@ export interface MonthlySummaryBuildOptions {
   /** Controls which missing scheduled days count as incomplete. Defaults to today in JST. */
   as_of_date?: string;
   cachedConfig?: PublicAppConfig;
+  cachedHolidayMap?: ReadonlyMap<string, string>;
 }
 
 function assertValidMonth(year: number, month: number): void {
@@ -108,7 +109,7 @@ export function buildMonthlySummaryFromRecords(
     recordMap.set(record.work_date, record);
   }
 
-  const holidayMap = buildHolidayMap(holidayData.holidays);
+  const holidayMap = options.cachedHolidayMap ?? buildHolidayMap(holidayData.holidays);
   const asOfDate = options.as_of_date ?? todayJST();
   if (!isValidDate(asOfDate)) throw new RangeError('Summary as_of_date is invalid');
   const resultRecords: AttendanceWithDay[] = [];
@@ -122,9 +123,12 @@ export function buildMonthlySummaryFromRecords(
   let totalWorkMinutes = 0;
   let totalTransportFee = 0;
 
-  for (let day = 1; day <= daysInMonth(year, month); day += 1) {
+  const totalDays = daysInMonth(year, month);
+  const firstWeekday = dayOfWeek(`${monthPrefix}01`);
+
+  for (let day = 1; day <= totalDays; day += 1) {
     const dateStr = `${monthPrefix}${String(day).padStart(2, '0')}`;
-    const weekday = dayOfWeek(dateStr);
+    const weekday = (firstWeekday + day - 1) % 7;
     const holidayName = holidayMap.get(dateStr) ?? null;
     const isHoliday = holidayName !== null;
     const isWeekend = weekday === 0 || weekday === 6;
