@@ -1,5 +1,39 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import type { D1Migration } from '@cloudflare/vitest-plugin';
+import {
+  BASELINE_NAME,
+  ensureBaseline,
+  SCHEMA_QUERY,
+  type MigrationAdapter,
+  type SchemaRow,
+} from '../scripts/migration-plan.mjs';
+import legacyMigrationSource from './fixtures/legacy-migrations.json?raw';
+
+const legacyMigrations: D1Migration[] = JSON.parse(legacyMigrationSource);
+
+function databaseAdapter(db: D1Database): MigrationAdapter {
+  return { query: async (sql) => (await db.prepare(sql).all<Record<string, unknown>>()).results };
+}
+
+function snapshotAdapter(
+  schema: SchemaRow[],
+  names: string[],
+  violations: Record<string, unknown>[] = [],
+) {
+  const writes: string[] = [];
+  const adapter: MigrationAdapter = {
+    async query(sql) {
+      if (sql === SCHEMA_QUERY) return schema;
+      if (sql.startsWith('SELECT name FROM sqlite_schema')) return [{ name: 'd1_migrations' }];
+      if (sql === 'SELECT name FROM d1_migrations ORDER BY id') return names.map((name) => ({ name }));
+      if (sql === 'PRAGMA foreign_key_check') return violations;
+      writes.push(sql);
+      return [];
+    },
+  };
+  return { adapter, writes };
+}
 
 interface NameRow {
   name: string;
@@ -27,11 +61,9 @@ async function indexColumns(index: string): Promise<string[]> {
 }
 
 describe('D1 final schema', () => {
-  it('applies additive migrations and creates the complete schema', async () => {
+  it('applies the single baseline and creates the complete schema', async () => {
     expect(env.TEST_MIGRATIONS.map((migration) => migration.name)).toEqual([
-      '0001_schema.sql',
-      '0002_attendance_revision.sql',
-      '0003_attendance_delete_audit.sql',
+      BASELINE_NAME,
     ]);
     expect(env.TEST_MIGRATIONS[0]?.queries.join('\n')).toContain(
       'CREATE TRIGGER users_preserve_last_admin_delete',
@@ -123,12 +155,17 @@ describe('D1 final schema', () => {
 
     const foreignKeyCheck = await env.DB.prepare('PRAGMA foreign_key_check').all();
     expect(foreignKeyCheck.results).toEqual([]);
+    const expected = (await env.DB.prepare(SCHEMA_QUERY).all<SchemaRow>()).results;
+    expect(await ensureBaseline(databaseAdapter(env.DB), expected)).toBe('current');
   });
 
-  it('upgrades an existing database without losing data or normal deletion audits', async () => {
+  it('adopts a real legacy database without changing any data or deletion audit behavior', async () => {
     // This binding is separate from DB, which setup.ts already fully migrates.
     const db = env.UPGRADE_DB;
-    await applyD1Migrations(db, env.TEST_MIGRATIONS.slice(0, 2));
+    const adapter = databaseAdapter(db);
+    const expected = (await env.DB.prepare(SCHEMA_QUERY).all<SchemaRow>()).results;
+    expect(await ensureBaseline(adapter, expected)).toBe('fresh');
+    await applyD1Migrations(db, legacyMigrations.slice(0, 2));
     const oldTrigger = await db.prepare(
       "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'attendance_audit_delete'",
     ).first<{ sql: string }>();
@@ -145,6 +182,12 @@ describe('D1 final schema', () => {
         (13, 2, '2026-10-01', 'Preserved record', 2)`),
       db.prepare(`INSERT INTO sessions (token_id, user_id, expires_at)
         VALUES ('upgrade-session', 1, '2026-11-01 00:00:00')`),
+      db.prepare(`INSERT INTO holidays_cache (year, date_str, name_ja, source)
+        VALUES (2026, '2026-01-01', '元日', 'legacy-test')`),
+      db.prepare(`INSERT INTO holiday_sync_state (year, source, item_count, source_modified)
+        VALUES (2026, 'legacy-test', 1, '2026-10-01')`),
+      db.prepare(`INSERT INTO holiday_sync_failures (year, retry_after)
+        VALUES (2027, '2026-11-01 00:00:00')`),
     ]);
     const readData = async () => {
       const results = await db.batch<Record<string, unknown>>([
@@ -152,18 +195,36 @@ describe('D1 final schema', () => {
         db.prepare('SELECT * FROM attendance ORDER BY id'),
         db.prepare('SELECT * FROM sessions ORDER BY token_id'),
         db.prepare('SELECT * FROM audit_logs ORDER BY id'),
+        db.prepare('SELECT * FROM holidays_cache ORDER BY id'),
+        db.prepare('SELECT * FROM holiday_sync_state ORDER BY year'),
+        db.prepare('SELECT * FROM holiday_sync_failures ORDER BY year'),
       ]);
       return results.map((result) => result.results);
     };
+    const partialData = await readData();
+    await expect(ensureBaseline(adapter, expected)).rejects.toThrow('Unsupported migration history');
+    expect(await readData()).toEqual(partialData);
+    await applyD1Migrations(db, legacyMigrations);
     const existingData = await readData();
+    expect(existingData).toEqual(partialData);
+    const oldHistory = await db.prepare('SELECT * FROM d1_migrations ORDER BY id').all();
 
-    // Applying the full list must skip the already-recorded migrations.
+    expect(await ensureBaseline(adapter, expected, { checkOnly: true })).toBe('adoptable');
+    expect((await db.prepare('SELECT * FROM d1_migrations ORDER BY id').all()).results)
+      .toEqual(oldHistory.results);
+    expect(await readData()).toEqual(existingData);
+
+    // Adoption records the new name, so the strict CREATE statements are skipped.
+    expect(await ensureBaseline(adapter, expected)).toBe('adopted');
     await applyD1Migrations(db, env.TEST_MIGRATIONS);
     expect(await readData()).toEqual(existingData);
     const applied = await db.prepare('SELECT name FROM d1_migrations ORDER BY id').all<NameRow>();
     expect(applied.results.map((row) => row.name)).toEqual(
-      env.TEST_MIGRATIONS.map((migration) => migration.name),
+      [...legacyMigrations.map((migration) => migration.name), BASELINE_NAME],
     );
+    expect((await db.prepare('SELECT * FROM d1_migrations ORDER BY id').all()).results.slice(0, 3))
+      .toEqual(oldHistory.results);
+    expect(await ensureBaseline(adapter, expected)).toBe('current');
     await applyD1Migrations(db, env.TEST_MIGRATIONS);
     expect(await readData()).toEqual(existingData);
 
@@ -190,5 +251,65 @@ describe('D1 final schema', () => {
     expect((await db.prepare('SELECT * FROM sessions').all()).results).toEqual([]);
     expect((await db.prepare('SELECT id FROM audit_logs ORDER BY id').all()).results).toHaveLength(4);
     expect((await db.prepare('PRAGMA foreign_key_check').all()).results).toEqual([]);
+  });
+
+  it('accepts equivalent ALTER-added column ordering and SQL formatting', async () => {
+    const expected = (await env.DB.prepare(SCHEMA_QUERY).all<SchemaRow>()).results;
+    const schema = expected.map((row) => ({ ...row }));
+    const users = schema.find((row) => row.name === 'users')!;
+    const definitions = [
+      /default_break_minutes\s+INTEGER\s+NOT NULL\s+DEFAULT 60\s+CHECK \(default_break_minutes BETWEEN 0 AND 480\),/,
+      /default_work_type\s+TEXT\s+NOT NULL\s+DEFAULT 'office'\s+CHECK \(default_work_type IN \('office', 'remote'\)\),/,
+    ];
+    const moved = definitions.map((pattern) => {
+      const match = users.sql.match(pattern);
+      expect(match).not.toBeNull();
+      users.sql = users.sql.replace(pattern, '');
+      return match![0];
+    });
+    users.sql = users.sql.replace('CHECK (length(username)', `${moved.join('\n')}\nCHECK (length(username)`);
+    users.sql = users.sql.replace('CREATE TABLE', 'create\n/* equivalent formatting */ table');
+    const { adapter, writes } = snapshotAdapter(schema, legacyMigrations.map((migration) => migration.name));
+    expect(await ensureBaseline(adapter, expected, { checkOnly: true })).toBe('adoptable');
+    expect(writes).toEqual([]);
+  });
+
+  it.each([
+    ['incomplete history', ['0001_schema.sql', '0002_attendance_revision.sql']],
+    ['unknown history', ['0001_schema.sql', '0002_attendance_revision.sql', '0003_other.sql']],
+    ['unexpected extra history', [...legacyMigrations.map((migration) => migration.name), '999_unknown.sql']],
+    ['baseline with incomplete legacy history', [BASELINE_NAME, '0001_schema.sql']],
+    ['untracked existing database', []],
+  ])('rejects %s without writing a baseline marker', async (_description, names) => {
+    const schema = (await env.DB.prepare(SCHEMA_QUERY).all<SchemaRow>()).results;
+    const { adapter, writes } = snapshotAdapter(schema, names);
+    await expect(ensureBaseline(adapter, schema)).rejects.toThrow('Unsupported migration history');
+    expect(writes).toEqual([]);
+  });
+
+  it.each([
+    ['missing revision', 'attendance', (sql: string) => sql.replace(/,\s*revision\s+INTEGER\s+NOT NULL\s+DEFAULT 1\s+CHECK \(revision >= 1\)/, '')],
+    ['changed default', 'users', (sql: string) => sql.replace('DEFAULT 60', 'DEFAULT 30')],
+    ['changed quoted literal', 'users', (sql: string) => sql.replace("'office', 'remote'", "'office ', 'remote'")],
+    ['changed compound key ordering', 'attendance', (sql: string) => sql.replace('UNIQUE (user_id, work_date)', 'UNIQUE (work_date, user_id)')],
+    ['missing cascade audit guard', 'attendance_audit_delete', (sql: string) => sql.replace('WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)', '')],
+  ])('rejects schema drift: %s', async (_description, name, transform) => {
+    const expected = (await env.DB.prepare(SCHEMA_QUERY).all<SchemaRow>()).results;
+    const schema = expected.map((row) => ({ ...row, sql: row.name === name ? transform(row.sql) : row.sql }));
+    expect(schema).not.toEqual(expected);
+    const { adapter, writes } = snapshotAdapter(schema, legacyMigrations.map((migration) => migration.name));
+    await expect(ensureBaseline(adapter, expected)).rejects.toThrow('Database schema does not match');
+    expect(writes).toEqual([]);
+  });
+
+  it('rejects foreign key violations without writing a baseline marker', async () => {
+    const schema = (await env.DB.prepare(SCHEMA_QUERY).all<SchemaRow>()).results;
+    const { adapter, writes } = snapshotAdapter(
+      schema,
+      legacyMigrations.map((migration) => migration.name),
+      [{ table: 'attendance', rowid: 12, parent: 'users', fkid: 0 }],
+    );
+    await expect(ensureBaseline(adapter, schema)).rejects.toThrow('foreign key violations');
+    expect(writes).toEqual([]);
   });
 });

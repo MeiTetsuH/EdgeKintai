@@ -1,6 +1,5 @@
--- EdgeKintai 2.0 final schema.
--- This release intentionally targets a fresh D1 database. It does not include
--- compatibility logic for the pre-release demo schema or migration history.
+-- EdgeKintai 2.9 baseline for new databases.
+-- Use npm run db:migrate:local or db:migrate:remote to adopt existing databases.
 
 CREATE TABLE users (
   id                            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +81,7 @@ CREATE TABLE attendance (
   memo                      TEXT NOT NULL DEFAULT '' CHECK (length(memo) <= 500),
   created_at                TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at                TEXT NOT NULL DEFAULT (datetime('now')),
+  revision                  INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE (user_id, work_date),
   CHECK (work_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
@@ -246,6 +246,7 @@ END;
 
 CREATE TRIGGER attendance_audit_delete
 AFTER DELETE ON attendance
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
 BEGIN
   INSERT INTO audit_logs (
     actor_user_id, target_user_id, action, entity_type, entity_key, before_json, after_json
