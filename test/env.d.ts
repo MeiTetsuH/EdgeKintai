@@ -1,4 +1,4 @@
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
+import type { D1Migration } from '@cloudflare/vitest-plugin';
 
 declare module '*?raw' {
   const content: string;
@@ -9,6 +9,7 @@ declare global {
   namespace Cloudflare {
     interface Env {
       TEST_MIGRATIONS: D1Migration[];
+      UPGRADE_DB: D1Database;
     }
   }
 }

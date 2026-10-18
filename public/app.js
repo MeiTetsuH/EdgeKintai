@@ -857,7 +857,7 @@
         if (!isWorking(type)) {
           await api(`/api/attendance/${encodeURIComponent(date)}`, {
             method: 'PUT',
-            body: clearedNonWorkingRecord(type, ''),
+            body: clearedNonWorkingRecord(type, state.today?.record?.memo ?? ''),
             headers: recordVersionHeaders(state.today?.record),
           });
         } else {
@@ -879,6 +879,10 @@
         resetClockActionTime();
         toast('勤務を記録しました。', 'success');
       } catch (error) {
+        if (error.status === 409 || error.status === 412) {
+          state.monthCache.clear();
+          await loadToday(true);
+        }
         handleAuthenticatedError(error, '勤務を記録できませんでした。');
       }
     });
@@ -914,6 +918,10 @@
         resetClockActionTime();
         toast('退勤を記録しました。', 'success');
       } catch (error) {
+        if (error.status === 409 || error.status === 412) {
+          state.monthCache.clear();
+          await loadToday(true);
+        }
         handleAuthenticatedError(error, '退勤を記録できませんでした。');
       }
     });
@@ -1925,12 +1933,14 @@
     try {
       const [year, month] = splitMonth(requestedMonth);
       const raw = await api(`/api/admin/overview/${year}/${month}`);
-      if (version !== adminOverviewRequestVersion || requestedMonth !== state.adminMonth) return;
+      if (version !== adminOverviewRequestVersion || requestedMonth !== state.adminMonth) return true;
       const users = Array.isArray(raw.users) ? raw.users : [];
       renderAdminOverview(users);
+      return true;
     } catch (error) {
-      if (version !== adminOverviewRequestVersion) return;
+      if (version !== adminOverviewRequestVersion) return true;
       handleAuthenticatedError(error, '月次勤務概要を取得できませんでした。');
+      return false;
     }
   }
 
@@ -2533,7 +2543,7 @@
         const results = [await loadToday(true)];
         if (state.page === 'calendar') results.push(await loadCalendar(true));
         if (state.page === 'summary') results.push(await loadSummary(true));
-        if (state.page === 'admin') await loadAdminOverview();
+        if (state.page === 'admin') results.push(await loadAdminOverview());
         ok = results.every(Boolean);
       }
       if (ok) lastResumeAt = Date.now();
@@ -2593,6 +2603,16 @@
         && (state.summaryMonth === prevMonth || state.summaryMonth === currMonth)
       ) {
         if (!await loadSummary(true)) {
+          lastObservedDate = prevDate;
+          return false;
+        }
+      }
+
+      if (
+        state.page === 'admin'
+        && (state.adminMonth === prevMonth || state.adminMonth === currMonth)
+      ) {
+        if (!await loadAdminOverview()) {
           lastObservedDate = prevDate;
           return false;
         }

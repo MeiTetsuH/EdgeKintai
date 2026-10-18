@@ -90,12 +90,12 @@ export async function getSessionUser(
        u.auth_version
      FROM sessions AS s
      INNER JOIN users AS u ON u.id = s.user_id
-     WHERE s.token_id = ?
-       AND s.auth_version = u.auth_version
-       AND s.expires_at > datetime('now')
-     LIMIT 1`,
+      WHERE s.token_id = ?
+        AND s.auth_version = u.auth_version
+        AND s.expires_at > ?
+      LIMIT 1`,
   )
-    .bind(tokenHash)
+    .bind(tokenHash, toSqliteDateTime(new Date()))
     .first<SessionUser>();
 }
 
@@ -155,12 +155,13 @@ export async function markSessionReauthenticated(
   ]);
   if (!tokenHash) return null;
   const reauthTokenHash = await hashSessionToken(reauthToken);
+  const nowSql = toSqliteDateTime(new Date());
   const result = await env.DB.prepare(
     `UPDATE sessions
-     SET reauthenticated_at = datetime('now'), reauth_token_hash = ?
-     WHERE token_id = ? AND user_id = ? AND expires_at > datetime('now')`,
+     SET reauthenticated_at = ?, reauth_token_hash = ?
+     WHERE token_id = ? AND user_id = ? AND expires_at > ?`,
   )
-    .bind(reauthTokenHash, tokenHash, userId)
+    .bind(nowSql, reauthTokenHash, tokenHash, userId, nowSql)
     .run();
   return (result.meta.changes ?? 0) === 1 ? reauthToken : null;
 }
@@ -175,17 +176,20 @@ export async function consumePasswordReauthentication(
   const tokenHash = await requestSessionHash(request);
   if (!tokenHash) return false;
   const reauthTokenHash = await hashSessionToken(reauthToken);
+  const now = Date.now();
+  const nowSql = toSqliteDateTime(new Date(now));
+  const minReauthSql = toSqliteDateTime(new Date(now - 5 * 60 * 1000));
   const consumed = await env.DB.prepare(
     `UPDATE sessions
      SET reauthenticated_at = NULL, reauth_token_hash = NULL
      WHERE token_id = ?
        AND user_id = ?
-       AND expires_at > datetime('now')
-       AND reauthenticated_at >= datetime('now', '-5 minutes')
+       AND expires_at > ?
+       AND reauthenticated_at >= ?
        AND reauth_token_hash = ?
      RETURNING token_id`,
   )
-    .bind(tokenHash, userId, reauthTokenHash)
+    .bind(tokenHash, userId, nowSql, minReauthSql, reauthTokenHash)
     .first<{ token_id: string }>();
   return consumed !== null;
 }
@@ -196,17 +200,19 @@ export async function createSession(
   expectedAuthVersion: number,
 ): Promise<SessionHandle | null> {
   const ttlSeconds = getSessionTtlSeconds(env);
-  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+  const now = Date.now();
+  const createdAt = new Date(now);
+  const expiresAt = new Date(now + ttlSeconds * 1000);
   const token = newOpaqueToken();
   const tokenHash = await hashSessionToken(token);
 
   const inserted = await env.DB.prepare(
-    `INSERT INTO sessions (token_id, user_id, expires_at, auth_version)
-     SELECT ?, id, ?, auth_version
+    `INSERT INTO sessions (token_id, user_id, expires_at, auth_version, created_at)
+     SELECT ?, id, ?, auth_version, ?
      FROM users
      WHERE id = ? AND auth_version = ?`,
   )
-    .bind(tokenHash, toSqliteDateTime(expiresAt), userId, expectedAuthVersion)
+    .bind(tokenHash, toSqliteDateTime(expiresAt), toSqliteDateTime(createdAt), userId, expectedAuthVersion)
     .run();
 
   if ((inserted.meta.changes ?? 0) !== 1) return null;

@@ -132,7 +132,8 @@ npm run dev
 │   └── styles.css
 ├── migrations/
 │   ├── 0001_schema.sql   # 初期スキーマ（適用済みファイルは変更しない）
-│   └── 0002_attendance_revision.sql # 編集競合の検出
+│   ├── 0002_attendance_revision.sql # 編集競合の検出
+│   └── 0003_attendance_delete_audit.sql # ユーザー削除時の監査ログ制御
 ├── scripts/              # デプロイヘルパー・テストスクリプト
 ├── test/                 # Vitest テスト
 ├── wrangler.jsonc        # Workers 設定
@@ -169,6 +170,7 @@ npm run dev
 適用済みの `0001_schema.sql` は変更せず、新しい migration を追加します。
 Workers Builds は Build command を `npm run verify`、Deploy command を `npm run deploy` に設定してください。
 `0002_attendance_revision.sql` は既存の勤務記録を保持したまま編集バージョンを追加します。
+`0003_attendance_delete_audit.sql` は既存データを保持し、ユーザー削除に伴う勤務記録の連鎖削除では個別の削除監査ログを作成しないようにします。勤務記録を直接削除した場合の監査ログは引き続き記録します。
 更新直後は開いたままの画面を再読み込みしてください。古い画面からの保存は 428 で拒否されます。
 
 勤務記録の編集・削除 API は、取得した `id` と `revision` による `If-Match: "id:revision"` が必要です。

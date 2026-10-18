@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
+import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin';
 import { defineConfig } from 'vitest/config';
 
 // PRIVATE DEPLOYMENT OVERRIDE: test the real configured browser allowlist.
@@ -16,7 +16,7 @@ export default defineConfig({
       miniflare: {
         compatibilityDate: '2026-07-29',
         compatibilityFlags: ['nodejs_compat'],
-        d1Databases: ['DB'],
+        d1Databases: ['DB', 'UPGRADE_DB'],
         ratelimits: {
           AUTH_RATE_LIMITER: {
             namespace_id: '2316401101',

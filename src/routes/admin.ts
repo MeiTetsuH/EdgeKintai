@@ -4,10 +4,10 @@ import { authMiddleware, type AuthEnv } from '../middleware/auth';
 import type { Attendance, User } from '../types';
 import { stringifyAuditJson } from '../utils/audit';
 import { getPublicConfig } from '../utils/config';
-import { getRequiredHolidayData } from '../utils/holidays';
+import { buildHolidayMap, getRequiredHolidayData } from '../utils/holidays';
 import { hashPassword } from '../utils/password';
 import { buildMonthlySummaryFromRecords } from '../utils/summary';
-import { monthStart, nextMonthStart } from '../utils/time';
+import { monthStart, nextMonthStart, todayJST } from '../utils/time';
 import {
   assertOnlyKeys,
   displayNameValue,
@@ -341,6 +341,8 @@ admin.get('/overview/:year/:month', async (c) => {
   }
 
   const config = getPublicConfig(c.env);
+  const holidayMap = buildHolidayMap(holidayData.holidays);
+  const asOfDate = todayJST();
   const users = usersResult.results.map((user) => ({
     user_id: user.id,
     username: user.username,
@@ -352,7 +354,7 @@ admin.get('/overview/:year/:month', async (c) => {
       month,
       recordsByUser.get(user.id) ?? [],
       holidayData,
-      { cachedConfig: config },
+      { cachedConfig: config, cachedHolidayMap: holidayMap, as_of_date: asOfDate },
     ),
   }));
 

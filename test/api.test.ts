@@ -1062,8 +1062,20 @@ describe('EdgeKintai API', () => {
     });
     expect(await workerSummary.json()).toMatchObject({ office_days: 0, total_transport_fee: 0 });
 
+    const workerRecord = await jsonRequest('/api/attendance/2026-07-07', 'PUT', {
+      work_type: 'office',
+      clock_in: '09:30',
+      clock_out: '18:30',
+      break_minutes: 60,
+    }, resetWorkerCookie);
+    expect(workerRecord.status).toBe(200);
+
     const removed = await jsonRequest(`/api/admin/users/${workerId}`, 'DELETE', {}, adminCookie);
     expect(removed.status).toBe(200);
+    const cascadedDeleteLogs = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'attendance_delete'",
+    ).first<{ count: number }>();
+    expect(cascadedDeleteLogs?.count).toBe(0);
     const revoked = await SELF.fetch(`${origin}/api/auth/me`, {
       headers: { Cookie: resetWorkerCookie },
     });

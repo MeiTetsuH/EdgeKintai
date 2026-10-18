@@ -1,0 +1,30 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "edge-kintai-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "wrangler",
+        "dev",
+        "--port",
+        "8787"
+      ],
+      "port": 8787
+    },
+    {
+      "name": "edge-kintai-dev-https",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "wrangler",
+        "dev",
+        "--port",
+        "8788",
+        "--local-protocol",
+        "https"
+      ],
+      "port": 8788,
+      "url": "https://localhost:8788"
+    }
+  ]
+}
