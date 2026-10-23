@@ -43,7 +43,7 @@ Workers Builds を設定する場合は、既存の D1 バインディングと 
 | Production branch | `main` |
 | Build command | `npm run verify` |
 | Deploy command | `npm run deploy` |
-| Build variable | `NODE_VERSION=24.11.0` |
+| Build variable | `NODE_VERSION=24.22.1` |
 
 **既存環境の更新:** DB の準備・更新には `npm run db:migrate:local` / `npm run db:migrate:remote` または `npm run deploy` を使用してください。旧版の更新が完了した DB は構造を検証し、データと既存の移行履歴を保持して引き継ぎます。未完了・未知の構造では停止するため、先に旧版の更新を完了してください。`wrangler d1 migrations apply` の直接実行は避けてください。
 

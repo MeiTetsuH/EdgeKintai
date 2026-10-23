@@ -9,7 +9,7 @@
     "url": "https://github.com/workHMZ/EdgeKintai.git"
   },
   "engines": {
-    "node": ">=24.11.0 <25"
+    "node": ">=24.22.1 <25"
   },
   "scripts": {
     "dev": "wrangler dev",
