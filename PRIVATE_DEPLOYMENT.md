@@ -51,3 +51,17 @@ npm run verify
 ```
 
 Do not use `merge=ours` or `assume-unchanged`, which can hide upstream fixes. Verify CI status, the Cloudflare deployment version and the live endpoint independently.
+
+## Dependency maintenance recorded on 2026-10-24
+
+The four deployment override paths above remain intentional fork customizations. The dependency fixes below are shared with `workHMZ/EdgeKintai` at `a169e4aceef180aeb8f6c5d7f7bbb5a0600a7089`; the personal production baseline is `f673c2f8fb6d09f6c6c4452ddcb55156cca01c8f`. Application code and migration files were unchanged by these patches.
+
+- In `package.json`, `overrides.miniflare.undici = ^7.30.1` and the matching `package-lock.json` resolution patch [GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c). This override is scoped to Miniflare.
+- In the same files, `overrides["@cloudflare/vitest-plugin"].zod = 4.6.6` replaces the plugin's 4.6.5 pin with the compatible patch for [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+- `.nvmrc` pins Node 24.22.1; preserve the matching patched minimum in `package.json`.
+
+Both dependency advisories affect the development-tool tree here; they do not establish exposure through the production application's handlers. Keep the scoped overrides until the corresponding upstream package resolves patched versions without them. Do not force a major upgrade or delete the lockfile to suppress an audit result.
+
+On the next upstream merge, review these manifest/lock entries alongside the four private override paths; keep both repositories' shared manifests and lockfiles aligned. Use npm, inspect `npm ls undici zod` and `npm audit`, then run the full documented verify and deployment dry-run gates. Recheck remote migration readiness through the existing migration checker before publication.
+
+The existing Cloudflare Git integration follows this fork's `main` and runs the project's verification/deployment scripts. Wait for that deployment rather than issuing a duplicate manual deploy. Check the active version and public `/health` independently; unauthenticated `/api/health/ready` must remain protected.
