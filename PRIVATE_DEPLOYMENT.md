@@ -4,8 +4,8 @@ This fork deploys EdgeKintai at `https://attendance.mingzhe.uk` and merges verif
 
 ## Overrides to retain during synchronization
 
-- `wrangler.jsonc`: Worker/account identity, D1 binding, disabled workers.dev/preview URLs and `HEALTH_PROBE_ALLOWED_ORIGINS`.
-- `vitest.config.mts`: the marked deployment-only block reads the actual probe allowlist from `wrangler.jsonc` and adds it to the isolated test bindings.
+- `wrangler.jsonc`: Worker/account identity (`worktime`), D1 binding, disabled `workers.dev`/preview URLs and `HEALTH_PROBE_ALLOWED_ORIGINS`.
+- `vitest.config.mts`: the marked deployment-only block reads the actual probe allowlist from `wrangler.jsonc` and appends it to the isolated test bindings without loading `.dev.vars`.
 - `test/private-health-cors.test.ts`: verifies the real deployment origins independently of upstream health tests.
 - This document.
 
@@ -44,24 +44,23 @@ Before deploying, run `npm ci`, `npm run verify`, and `npm run deploy:dry-run`. 
 After merging an upstream release, compare the documented private delta and preserve upstream test contracts:
 
 ```sh
-git diff <upstream-tag> --name-only
-git diff --exit-code <upstream-tag> -- test/health.test.ts
+git diff <upstream-commit-or-tag> --name-only
+git diff --exit-code <upstream-commit-or-tag> -- test/health.test.ts
 rg -n 'PRIVATE DEPLOYMENT OVERRIDE' vitest.config.mts
 npm run verify
 ```
 
 Do not use `merge=ours` or `assume-unchanged`, which can hide upstream fixes. Verify CI status, the Cloudflare deployment version and the live endpoint independently.
 
-## Dependency maintenance recorded on 2026-10-24
+## Dependency and runtime maintenance recorded on 2026-11-11
 
-The four deployment override paths above remain intentional fork customizations. The dependency fixes below are shared with `workHMZ/EdgeKintai` at `a169e4aceef180aeb8f6c5d7f7bbb5a0600a7089`; the personal production baseline is `f673c2f8fb6d09f6c6c4452ddcb55156cca01c8f`. Application code and migration files were unchanged by these patches.
+The four deployment override paths above remain intentional fork customizations. Shared dependency manifests and lockfiles match `workHMZ/EdgeKintai` `2.9.1` (`8d483c46220e5ea9ef84d973d086b0c2844d83ae`) byte-for-byte:
 
-- In `package.json`, `overrides.miniflare.undici = ^7.30.1` and the matching `package-lock.json` resolution patch [GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c). This override is scoped to Miniflare.
-- In the same files, `overrides["@cloudflare/vitest-plugin"].zod = 4.6.6` replaces the plugin's 4.6.5 pin with the compatible patch for [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
-- `.nvmrc` pins Node 24.22.1; preserve the matching patched minimum in `package.json`.
+- `wrangler` `^4.160.0` (`miniflare` -> `undici` `7.30.1`) and `@cloudflare/vitest-plugin` `^1.7.0` (`zod` `4.6.6`) now resolve patched versions natively, so the earlier scoped overrides for `miniflare.undici` and `@cloudflare/vitest-plugin.zod` were removed.
+- `overrides.minimatch = ^11.0.7` in `package.json` and `package-lock.json` patches [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) in the ESLint development dependency chain (`npm audit`: 0 vulnerabilities). Retain until ESLint's dependency tree resolves `minimatch >=11.0.1` without an override.
+- `wrangler.jsonc` aligns `compatibility_date` (`2026-11-10`), `upload_source_maps` and `observability` (`redact_query_string`, `logs`, `traces`) with upstream while retaining the personal Worker/account/D1/Origin settings.
+- `.nvmrc` pins Node `24.22.1`; `package.json` keeps `engines.node` at `>=24.22.1 <25`.
 
-Both dependency advisories affect the development-tool tree here; they do not establish exposure through the production application's handlers. Keep the scoped overrides until the corresponding upstream package resolves patched versions without them. Do not force a major upgrade or delete the lockfile to suppress an audit result.
-
-On the next upstream merge, review these manifest/lock entries alongside the four private override paths; keep both repositories' shared manifests and lockfiles aligned. Use npm, inspect `npm ls undici zod` and `npm audit`, then run the full documented verify and deployment dry-run gates. Recheck remote migration readiness through the existing migration checker before publication.
+On the next upstream merge, review `package.json` and `package-lock.json` alongside the four override paths, keep both repositories' manifests and lockfiles aligned using npm, inspect `npm audit`, and run `npm run verify` plus `npm run deploy:dry-run`.
 
 The existing Cloudflare Git integration follows this fork's `main` and runs the project's verification/deployment scripts. Wait for that deployment rather than issuing a duplicate manual deploy. Check the active version and public `/health` independently; unauthenticated `/api/health/ready` must remain protected.
