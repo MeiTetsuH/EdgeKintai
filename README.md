@@ -4,6 +4,8 @@ Cloudflare Workers + D1 で動作する、多ユーザー対応の勤怠管理�
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/workHMZ/EdgeKintai)
 
+https://github.com/user-attachments/assets/af0d1d6d-78d4-4a1a-95e8-377fddb4f769
+
 ## 主な機能
 
 - 出社・在宅・有給休暇・休日・欠勤の記録、出退勤の打刻
