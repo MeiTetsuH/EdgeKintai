@@ -30,17 +30,17 @@
     "verify": "npm run build && npm run cf-typegen:check && npm run deploy:cf:check && npm run lint:frontend && npm run test:ui && npm run test:excel && npm test"
   },
   "dependencies": {
-    "hono": "^4.13.17"
+    "hono": "^4.13.19"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.7.0",
-    "@cloudflare/workers-types": "^5.20261110.1",
+    "@cloudflare/vitest-plugin": "^1.8.3",
+    "@cloudflare/workers-types": "^5.20261116.1",
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.14.0",
+    "eslint": "^10.15.0",
     "globals": "^17.14.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
-    "wrangler": "^4.160.0"
+    "wrangler": "^4.163.0"
   },
   "cloudflare": {
     "bindings": {
@@ -48,8 +48,5 @@
         "description": "Required one-time bootstrap secret. Generate with: openssl rand -hex 32"
       }
     }
-  },
-  "overrides": {
-    "minimatch": "^11.0.7"
   }
 }

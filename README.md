@@ -25,7 +25,7 @@ Cloudflare Workers + D1 で動作する、多ユーザー対応の勤怠管理�
 
 ## デプロイ
 
-Node.js 24.11 以降の 24.x と npm を使用します。
+Node.js 24.22.1 以降の 24.x と npm を使用します。
 
 ```bash
 npm ci
@@ -61,7 +61,7 @@ npm run dev -- --local-protocol https
 
 | コマンド | 用途 |
 |---|---|
-| `npm run verify` | 型チェック・テスト・デプロイ設定の検証 |
+| `npm run verify` | 型チェック・Lint・テスト・デプロイ設定の検証 |
 | `npm run deploy:dry-run` | 公開せずにデプロイ用ビルドを確認 |
 | `npm run deploy` | 既存環境の DB 更新と Worker デプロイ |
 

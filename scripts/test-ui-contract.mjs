@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
 
-const [app, html] = await Promise.all([
+const [app, html, css] = await Promise.all([
   readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
   readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+  readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
 ]);
 
 // Parse the complete browser bundle so a missing bracket cannot ship behind
@@ -37,6 +38,13 @@ if (/\bintegerInput\s*\(/.test(app)) {
 
 if (!/function\s+previousDate\s*\(/.test(app)) {
   throw new Error('previousDate helper must be defined');
+}
+
+// Page margins take the root colour scheme's canvas colour, so the print
+// styles must force the light scheme or a dark theme prints black margins.
+const printBlock = css.slice(css.indexOf('@media print {'));
+if (!/:root\s*\{\s*color-scheme:\s*light\s*!important;/.test(printBlock)) {
+  throw new Error('Print styles must force color-scheme: light on :root');
 }
 
 console.log(`UI contract OK (${referencedIds.size} referenced ids, ${htmlIds.size} HTML ids, regression guards passed)`);
