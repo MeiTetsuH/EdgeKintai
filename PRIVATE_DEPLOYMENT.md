@@ -52,14 +52,15 @@ npm run verify
 
 Do not use `merge=ours` or `assume-unchanged`, which can hide upstream fixes. Verify CI status, the Cloudflare deployment version and the live endpoint independently.
 
-## Dependency and runtime maintenance recorded on 2026-11-11
+## Dependency and runtime maintenance recorded on 2026-11-17
 
-The four deployment override paths above remain intentional fork customizations. Shared dependency manifests and lockfiles match `workHMZ/EdgeKintai` `2.9.1` (`8d483c46220e5ea9ef84d973d086b0c2844d83ae`) byte-for-byte:
+The four deployment override paths above remain intentional fork customizations. Shared dependency manifests and lockfiles match `workHMZ/EdgeKintai` commit `4146074` (print styles, README screenshots and dependency updates on top of `2.9.1`) byte-for-byte:
 
-- `wrangler` `^4.160.0` (`miniflare` -> `undici` `7.30.1`) and `@cloudflare/vitest-plugin` `^1.7.0` (`zod` `4.6.6`) now resolve patched versions natively, so the earlier scoped overrides for `miniflare.undici` and `@cloudflare/vitest-plugin.zod` were removed.
-- `overrides.minimatch = ^11.0.7` in `package.json` and `package-lock.json` patches [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) in the ESLint development dependency chain (`npm audit`: 0 vulnerabilities). Retain until ESLint's dependency tree resolves `minimatch >=11.0.1` without an override.
+- `wrangler` `^4.163.0` (`undici` `7.30.1`) and `@cloudflare/vitest-plugin` `^1.8.3` (`zod` `4.6.6`) resolve patched versions natively, so no scoped overrides are needed. `hono` is `^4.13.19`, `eslint` `^10.15.0` and `@cloudflare/workers-types` `^5.20261116.1`.
+- The `minimatch` override was removed on 2026-11-17: ESLint 10.15 requires `minimatch ^11.0.5` and the lockfile resolves `11.0.9`, which patches [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (`npm audit`: 0 vulnerabilities).
 - `wrangler.jsonc` aligns `compatibility_date` (`2026-11-10`), `upload_source_maps` and `observability` (`redact_query_string`, `logs`, `traces`) with upstream while retaining the personal Worker/account/D1/Origin settings.
-- `.nvmrc` pins Node `24.22.1`; `package.json` keeps `engines.node` at `>=24.22.1 <25`.
+- `.nvmrc` pins Node `24.22.1`; `package.json` keeps `engines.node` at `>=24.22.1 <25`. Node `24.22.3` is the latest 24.x; the floor stays at `24.22.1`, matching the `NODE_VERSION=24.22.1` build variable documented in `README.md`.
+- The CI workflow pins `actions/setup-node` to `v7.1.0` and `actions/checkout` to `v7.0.1` by commit SHA.
 
 On the next upstream merge, review `package.json` and `package-lock.json` alongside the four override paths, keep both repositories' manifests and lockfiles aligned using npm, inspect `npm audit`, and run `npm run verify` plus `npm run deploy:dry-run`.
 

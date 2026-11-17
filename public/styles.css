@@ -1959,6 +1959,13 @@ tbody tr.is-incomplete-row td {
     margin: 8mm 10mm;
   }
 
+  /* The page margins are painted with the canvas colour of the root colour
+     scheme, not with the html/body background set below. Without this a dark
+     theme prints black margins around the white report. */
+  :root {
+    color-scheme: light !important;
+  }
+
   *,
   *::before,
   *::after {
@@ -2167,6 +2174,13 @@ tbody tr.is-incomplete-row td {
   }
 
   td:nth-child(1) { text-align: left !important; } /* 日付 */
+  /* 区分: a holiday name such as 祝日(スポーツの日) does not fit this narrow
+     column on one line; wrap it instead of cutting it off with an ellipsis. */
+  td:nth-child(2) {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    text-overflow: clip !important;
+  }
   td:nth-child(8) { text-align: left !important; font-size: 6.8pt !important; } /* 経路 */
   td:nth-child(9),
   td:nth-child(11) { text-align: right !important; font-variant-numeric: tabular-nums !important; } /* 運賃 */
